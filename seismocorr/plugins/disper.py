@@ -60,12 +60,12 @@ class FJ(DispersionStrategy):
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
         w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)))
+        spec = np.zeros((len(f), len(v)), dtype=complex)
         
         for i, fi in enumerate(f):
             if fi == 0:
                 continue
-            FJ_array = np.zeros(len(v))
+            FJ_array = np.zeros(len(v), dtype=complex)
             y0 = cc_array_f[:, i]
             
             for j, vj in enumerate(v):
@@ -84,12 +84,12 @@ class FJ_RR(DispersionStrategy):
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
         w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)))
+        spec = np.zeros((len(f), len(v)), dtype=complex)
         
         for i, fi in enumerate(f):
             if fi == 0:
                 continue
-            FJ_array = np.zeros(len(v))
+            FJ_array = np.zeros(len(v), dtype=complex)
             y0 = cc_array_f[:, i]
             
             for j, vj in enumerate(v):
@@ -108,12 +108,12 @@ class MFJ_RR(DispersionStrategy):
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
         w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)))
+        spec = np.zeros((len(f), len(v)), dtype=complex)
         
         for i, fi in enumerate(f):
             if fi == 0:
                 continue
-            FJ_array = np.zeros(len(v))
+            FJ_array = np.zeros(len(v), dtype=complex)
             y0 = cc_array_f[:, i]
             
             for j, vj in enumerate(v):
@@ -132,12 +132,10 @@ class SlantStack(DispersionStrategy):
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
         w = np.sqrt(dist.copy())
-        spec = np.zeros((len(f), len(v)))
+        spec = np.zeros((len(f), len(v)), dtype=complex)
         
         for i, fi in enumerate(f):
-            if fi == 0:
-                continue
-            slant_stack_array = np.zeros(len(v))
+            slant_stack_array = np.zeros(len(v), dtype=complex)
             y0 = cc_array_f[:, i]
             y2 = y0 @ (y0 * w)
             
@@ -146,9 +144,9 @@ class SlantStack(DispersionStrategy):
                 m1_cos = np.cos(k1 * dist)
                 m1_sin = np.sin(k1 * dist)
                 cross = (m1_cos @ (y0 * w)) ** 2 + (m1_sin @ (y0 * w)) ** 2
-                slant_stack_array[j] = cross / y2
+                slant_stack_array[j] = cross
                 
-            spec[i, :] = slant_stack_array
+            spec[i, :] = slant_stack_array/y2
             
         return spec
 
@@ -159,12 +157,12 @@ class SPAC(DispersionStrategy):
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
         dist_km = dist / 1000  # 转换为公里
-        spec = np.zeros((len(f), len(v)))
+        spec = np.zeros((len(f), len(v)), dtype=complex)
         
         for i, fi in enumerate(f):
             if fi == 0:
                 continue
-            vr0 = np.zeros(len(v))
+            vr0 = np.zeros(len(v), dtype=complex)
             y0 = cc_array_f[:, i]
             y2 = y0 @ y0
             
@@ -184,37 +182,77 @@ class MASW(DispersionStrategy):
     
     def compute(self, u: np.ndarray, f: np.ndarray, dist: np.ndarray, 
                 config: DispersionConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """MASW方法需要不同的参数，重写compute方法"""
+        '''
+        :param u: [npts, N],ccfs in time domain
+        :param N: the number of ccfs
+        :param x: dists
+        :param fs: sampling rate of ccfs
+        :param cT_min: the min value of phase velocity
+        :param cT_max: the max value of phase velocity
+        :param delta_cT: the linspace of phase velocity
+        :return: Spectrum from Phase shift Method
+        '''
+        # Converting measuring frequency from Hz to rad/sec
         omega_fs = 2 * np.pi * config.sampling_rate
-        N = u.shape[1]
+        N = len(u[0, :])  # Number of ccfs
+
+        # Number of samples in each trace
         Lu = len(u[:, 0])
-        
-        # 傅里叶变换
+
+        # Empty matrices with Lu lines and N columns
         U = np.zeros((Lu, N), dtype=complex)
+        P = np.zeros((Lu, N), dtype=complex)
+        Unorm = np.zeros((Lu, N), dtype=complex)
+
+        # Apply discrete Fourier transform to the time axis of u
         for j in range(N):
             U[:, j] = np.fft.fft(u[:, j])
-        
-        # 相位归一化
-        P = np.zeros((Lu, N), dtype=complex)
+
+        # Number of samples in each transformed trace
+        LU = len(U[0, :])
+
+        # Normalize U in offset and frequency domains
+        # Compute the phase spectrum of U
+        i = 1j
         for j in range(N):
-            P[:, j] = np.exp(-1j * np.angle(U[:, j]))
-        
-        # 频率和速度范围
-        omega = np.arange(0, Lu) * (omega_fs / Lu)
-        cT = np.arange(config.vmin, config.vmax + config.vnum, config.vnum)
-        
-        # 计算幅度谱
-        A = np.zeros((len(omega), len(cT)))
-        for j in range(len(omega)):
-            for k in range(len(cT)):
+            for k in range(LU):
+                Unorm[k, j] = U[k, j] / np.abs(U[k, j])
+            P[:, j] = np.exp(-i * np.angle(U[:, j]))
+
+        # Frequency range for U
+        omega = np.arange(0, LU) * (omega_fs / LU)
+
+        # Compute the slant-stack (summed) amplitude corresponding to each set of omega and cT, A(omega,cT)
+        cT = np.linspace(config.vmin, config.vmax, config.vnum)  # Testing Rayleigh wave phase velocity [m/s]
+        LcT = len(cT)
+
+        # Empty matrices with LU lines and LcT columns
+        c = np.zeros((LU, LcT))
+        f = np.zeros((LU, LcT))
+        A = np.zeros((LU, LcT))
+
+        for j in range(LU):  # Frequency component j
+            for k in range(LcT):  # Testing Rayleigh wave phase velocity k
+                # Frequency (in [Hz]) corresponding to angular frequency omega
+                f[j, k] = omega[j] / (2 * np.pi)
+                # Testing phase velocity [m/s]
+                c[j, k] = cT[k]
+                # Determining the amount of phase shifts required to counterbalance
+                # the time delay corresponding to specific offsets for a given set
+                # of omega and cT
                 delta = omega[j] / cT[k]
+                # Applying the phase shifts (delta) to distinct traces of the
+                # transformed shot gather
+                # Obtaining the (normalized) slant-stack (summed) amplitude
+                # corresponding to each set of omega and cT
                 temp = 0
                 for l in range(N):
-                    temp += np.exp(-1j * delta * dist[l]) * P[j, l]
+                    temp = temp + np.exp(-i * delta * dist[l]) * P[j, l]
+                # Compute absolute value and normalize with respect to number of
+                # receivers
                 A[j, k] = np.abs(temp) / N
-        
-        f_plot = omega / (2 * np.pi)
-        return f_plot, cT, A
+
+        return f[0], cT, A
 
 
 class DispersionFactory:

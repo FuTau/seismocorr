@@ -88,24 +88,23 @@ class NoTimeNorm(TimeNormalizer):
 
 class RAMNormalizer(TimeNormalizer):
     """RAM 归一化: x / mean(|x|)"""
-    def __init__(self,fmin,Fs,npts,norm_win=0.5):
+    def __init__(self,fmin,Fs,norm_win=0.5):
         self.fmin = fmin
         self.Fs = Fs
-        self.npts = npts
         self.norm_win = norm_win
 
     def apply(self, x: np.ndarray) -> np.ndarray:
         period = 1 / self.fmin
         lwin = int(period * self.Fs * self.norm_win)
-        st = 0
         N = 2*lwin+1
-        data = data/moving_ave(np.abs(data),N)
+        x = x/moving_ave(np.abs(x),N)
+        return x.copy()
 
 _TIME_NORM_MAP = {
     'zscore': ZScoreNormalizer,
     'one-bit': OneBitNormalizer,
     'rms': RMSNormalizer,
-    'clip': lambda: ClipNormalizer(clip_val=3.0),
+    'clip': ClipNormalizer,  # 直接使用类，而不是lambda
     'no': NoTimeNorm,
     'ramn': RAMNormalizer
 }
@@ -115,8 +114,8 @@ def get_time_normalizer(name: str, **kwargs) -> TimeNormalizer:
     获取时域归一化器实例
 
     Args:
-        name: 方法名 ('zscore', 'one-bit', 'rms', 'clip', 'no')
-        **kwargs: 传递给特定类的参数（如 clip_val）
+        name: 方法名 ('zscore', 'one-bit', 'rms', 'clip', 'ramn', 'no')
+        **kwargs: 传递给特定类的参数
 
     Returns:
         TimeNormalizer 实例
@@ -126,8 +125,20 @@ def get_time_normalizer(name: str, **kwargs) -> TimeNormalizer:
         raise ValueError(f"Unknown time normalization method: '{name}'. "
                        f"Choose from {list(_TIME_NORM_MAP.keys())}")
     
+    # 根据方法名传递特定参数
     if name.lower() == 'clip':
         clip_val = kwargs.get('clip_val', 3.0)
-        return ClipNormalizer(clip_val=clip_val)
+        return cls(clip_val=clip_val)
+    elif name.lower() == 'ramn':
+        # RAMNormalizer 需要特定参数
+        fmin = kwargs.get('fmin')
+        Fs = kwargs.get('Fs')
+        norm_win = kwargs.get('norm_win', 0.5)
+        
+        if fmin is None or Fs is None:
+            raise ValueError("RAMNormalizer requires fmin and Fs parameters")
+            
+        return cls(fmin=fmin, Fs=Fs, norm_win=norm_win)
     else:
+        # 其他归一化方法使用默认构造函数
         return cls()

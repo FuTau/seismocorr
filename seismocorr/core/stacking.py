@@ -10,8 +10,8 @@ Staking Strategies for Cross-Correlation Functions (CCFs)
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Union, Callable
-
-from scipy.fftpack import hilbert, next_fast_len
+from scipy.signal import hilbert
+from scipy.fftpack import next_fast_len
 
 # 类型别名
 ArrayLike = Union[np.ndarray, List[float], List[np.ndarray]]
@@ -84,7 +84,7 @@ class PhaseWeightedStack(StackingStrategy):
     Ref: Schimmel and Palssen, 1997
     使用相位一致性作为权重：一致性越高，权重越大
     """
-    def __init__(self,power):
+    def __init__(self,power=2):
         self.power = power
 
     def stack(self, ccf_list: List[np.ndarray]) -> np.ndarray:
@@ -124,41 +124,8 @@ class RobustStack(StackingStrategy):
             newstack = np.sum((w*ccfs.T).T, axis=0)
             res = np.linalg.norm(newstack - stack,ord = 1) / np.linalg.norm(newstack) / len(ccfs[:,1])
             nstep += 1
-            if nstep > 10:
-                return newstack, w, nstep
+            
         return newstack
-
-
-
-class TimeFrequencyStack(StackingStrategy):
-    """
-    时频加权叠加（TF-PWS）
-    在时频域进行相位加权，进一步提升分辨率
-    Ref: Bensen et al., 2007; Trad et al., 2003
-    """
-    def __init__(self, window_length: int = 20, alpha: float = 2.0):
-        self.win_len = window_length
-        self.alpha = alpha
-
-    def stack(self, ccf_list: List[np.ndarray]) -> np.ndarray:
-        from scipy.signal import stft, istft
-
-        stacked = np.zeros_like(ccf_list[0])
-        weights = np.ones_like(stacked)
-
-        for ccf in ccf_list:
-            # 短时傅里叶变换
-            f, t, Z = stft(ccf, nperseg=self.win_len)
-            phase = np.exp(1j * np.angle(Z))
-            phase_coh = np.abs(np.mean(phase, axis=0))  # 时间点上的平均相位一致性
-            tf_weights = phase_coh ** self.alpha
-
-            # 逆变换回时域
-            _, reconstructed = istft(Z * tf_weights, nperseg=self.win_len)
-            stacked += reconstructed[:len(stacked)]
-            weights += tf_weights.mean(axis=0)[:len(stacked)]
-
-        return stacked / len(ccf_list)
 
 
 # =====================================================================
@@ -169,8 +136,8 @@ _STRATEGY_REGISTRY = {
     'linear': LinearStack,
     'pws': PhaseWeightedStack,
     'robust': RobustStack,
-    'selective': SelectiveStack,
-    'tf-pws': TimeFrequencyStack,
+    'nroot': NrootStack,
+    'selective': SelectiveStack
 }
 
 def get_stacker(name: str, **kwargs) -> StackingStrategy:
@@ -194,15 +161,10 @@ def get_stacker(name: str, **kwargs) -> StackingStrategy:
     
     # 特殊处理带参数的类
     if name.lower() == 'pws':
-        return cls(alpha=kwargs.get('power', 2.0))
+        return cls(power=kwargs.get('power', 2.0))
     elif name.lower() == 'robust':
         return cls(
-            threshold=kwargs.get('epsilon', 1.0*1e-8)
-        )
-    elif name.lower() == 'tf-pws':
-        return cls(
-            window_length=kwargs.get('window_length', 20),
-            alpha=kwargs.get('alpha', 2.0)
+            epsilon=kwargs.get('epsilon', 1.0*1e-8)
         )
     else:
         return cls()

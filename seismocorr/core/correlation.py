@@ -13,12 +13,13 @@ Cross-Correlation Core Module
 """
 
 import numpy as np
-from typing import Union, Tuple, Optional, Dict, List
+from typing import Any, Union, Tuple, Optional, Dict, List
 from scipy.signal import correlate, butter, filtfilt
 from scipy.fftpack import fft, ifft
 
 from seismocorr.preprocessing.time_norm import get_time_normalizer
 from seismocorr.preprocessing.freq_norm import get_freq_normalizer
+from seismocorr.preprocessing.normal_func import bandpass, detrend, demean, taper
 from seismocorr.core.stacking import stack_ccfs
 
 
@@ -51,6 +52,8 @@ def compute_cross_correlation(
     freq_band: Optional[Tuple[float, float]] = None,
     max_lag: Optional[Union[float, int]] = None,
     nfft: Optional[int] = None,
+    time_norm_kwargs: Optional[Dict[str, Any]] = None,
+    freq_norm_kwargs: Optional[Dict[str, Any]] = None,
 ) -> LagsAndCCF:
     """
     计算两个时间序列的互相关函数（CCF）
@@ -61,7 +64,7 @@ def compute_cross_correlation(
         method: 计算方法 ('time-domain', 'freq-domain', 'deconv', 'coherency')
         normalize: 归一化方式
         freq_band: 带通滤波范围 (fmin, fmax)，单位 Hz
-        max_lag: 最大滞后时间（秒）或样本数；若为 None，则使用 min(len(x), len(y))
+        max_lag: 最大滞后时间（秒）；若为 None，则使用 min(len(x), len(y))
         nfft: FFT 长度，自动补零到 next_fast_len
 
     Returns:
@@ -70,27 +73,40 @@ def compute_cross_correlation(
     """
     x = _as_float_array(x)
     y = _as_float_array(y)
-
+    if len(x) == 0 or len(y) == 0:
+        return np.array([]), np.array([])
+    if not max_lag:
+        max_lag = min(len(x), len(y)) / sampling_rate
+    # 初始化参数字典
+    time_norm_kwargs = time_norm_kwargs or {}
+    freq_norm_kwargs = freq_norm_kwargs or {}
+    x = detrend(x, type='linear')
+    x = demean(x)
+    x = taper(x, width=0.05)
+    y = detrend(y, type='linear')
+    y = demean(y)
+    y = taper(y, width=0.05)
     # 参数预处理
-    if max_lag is not None:
-        if isinstance(max_lag, float):
-            max_lag_samples = int(max_lag * sampling_rate)
-        else:
-            max_lag_samples = int(max_lag)
-    else:
-        max_lag_samples = min(len(x), len(y)) // 2
 
     # 滤波
     if freq_band is not None:
-        x = _bandpass_filter(x, freq_band, sampling_rate)
-        y = _bandpass_filter(y, freq_band, sampling_rate)
-
+        x = bandpass(x, freq_band[0],freq_band[1], sr=sampling_rate)
+        y = bandpass(y, freq_band[0],freq_band[1], sr=sampling_rate)
+    # 时域归一化 - 确保传递必要的参数
+    time_norm_kwargs_with_fs = time_norm_kwargs.copy()
+    if 'Fs' not in time_norm_kwargs_with_fs:
+        time_norm_kwargs_with_fs['Fs'] = sampling_rate
+    if 'npts' not in time_norm_kwargs_with_fs:
+        time_norm_kwargs_with_fs['npts'] = len(x)  # 使用x的长度作为默认
     # 归一化
-    normalizer = get_time_normalizer(time_normalize)
+    normalizer = get_time_normalizer(time_normalize,**time_norm_kwargs_with_fs)
     x = normalizer.apply(x)
     y = normalizer.apply(y)
-
-    normalizer = get_freq_normalizer(freq_normalize)
+    # 频域归一化 - 确保传递必要的参数
+    freq_norm_kwargs_with_fs = freq_norm_kwargs.copy()
+    if 'Fs' not in freq_norm_kwargs_with_fs:
+        freq_norm_kwargs_with_fs['Fs'] = sampling_rate
+    normalizer = get_freq_normalizer(freq_normalize,**freq_norm_kwargs_with_fs)
     x = normalizer.apply(x)
     y = normalizer.apply(y)
 
@@ -100,11 +116,11 @@ def compute_cross_correlation(
 
     # 选择方法
     if method == 'time-domain':
-        lags, ccf = _xcorr_time_domain(x, y, sampling_rate, max_lag_samples)
+        lags, ccf = _xcorr_time_domain(x, y, sampling_rate, max_lag)
     elif method in ['freq-domain', 'deconv']:
-        lags, ccf = _xcorr_freq_domain(x, y, sampling_rate, max_lag_samples, nfft, deconv=method=='deconv')
+        lags, ccf = _xcorr_freq_domain(x, y, sampling_rate, max_lag, nfft, deconv=method=='deconv')
     elif method == 'coherency':
-        lags, ccf = _coherency(x, y, sampling_rate, max_lag_samples, nfft)
+        lags, ccf = _coherency(x, y, sampling_rate, max_lag, nfft)
     else:
         raise ValueError(f"Unsupported method: {method}. Choose from {SUPPORTED_METHODS}")
 
@@ -138,9 +154,14 @@ def batch_cross_correlation(
     result = {}
     for a, b in pairs:
         if a not in traces or b not in traces:
+            # print(a)
+            # print(b)
+            # print(traces.keys())
             continue
         try:
             lags, ccf = compute_cross_correlation(traces[a], traces[b], sampling_rate, **kwargs)
+            # print(lags,ccf)
+            # print(f"Computed CCF for pair: {a} - {b}")
             key = f"{a}--{b}"
             result[key] = (lags, ccf)
         except Exception as e:
@@ -155,27 +176,81 @@ def batch_cross_correlation(
 def _as_float_array(x: ArrayLike) -> np.ndarray:
     return np.asarray(x, dtype=np.float64).flatten()
 
-def _bandpass_filter(data: np.ndarray, band: Tuple[float, float], sr: float) -> np.ndarray:
-    fmin, fmax = band
-    nyq = sr / 2.0
-    if fmax >= nyq:
-        fmax = 0.95 * nyq
-    b, a = butter(4, [fmin / nyq, fmax / nyq], btype='band')
-    return filtfilt(b, a, data)
+def _xcorr_time_domain(x: np.ndarray, y: np.ndarray, sr: float, max_lag: float) -> LagsAndCCF:
+    """
+    时域互相关计算
+    
+    Args:
+        x, y: 输入信号
+        sr: 采样率 (Hz)
+        max_lag: 最大滞后时间（秒）
+        
+    Returns:
+        lags: 时间滞后数组 (单位：秒)
+        ccf: 互相关函数值
+    """
+    # 确保输入信号长度相同
+    min_len = min(len(x), len(y))
+    x = x[:min_len]
+    y = y[:min_len]
+    
+    # 将秒转换为样本数
+    max_lag_samples = int(max_lag * sr)
+    
+    # 限制最大滞后不超过信号长度
+    max_lag_samples = min(max_lag_samples, min_len - 1)
+    
+    # 计算互相关
+    ccf_full = correlate(x, y, mode='full')
+    
+    # 计算滞后对应的索引范围
+    n = len(ccf_full)
+    center = n // 2  # 零滞后对应的索引
+    
+    # 截取从 -max_lag_samples 到 +max_lag_samples 的部分
+    start_idx = center - max_lag_samples
+    end_idx = center + max_lag_samples + 1  # +1 确保包含max_lag_samples
+    
+    # 确保索引不越界
+    start_idx = max(0, start_idx)
+    end_idx = min(n, end_idx)
+    
+    # 提取互相关值
+    ccf = ccf_full[start_idx:end_idx]
+    
+    # 计算对应的滞后时间（秒）
+    lags_samples = np.arange(-max_lag_samples, max_lag_samples + 1)
+    lags = lags_samples / sr
+    
+    # 归一化互相关
+    norm_factor = np.sqrt(np.sum(x**2) * np.sum(y**2))
+    if norm_factor > 0:
+        ccf = ccf / norm_factor
+    
+    return lags, ccf
 
-def _xcorr_time_domain(x: np.ndarray, y: np.ndarray, sr: float, max_lag: int) -> LagsAndCCF:
-    ccf = correlate(x, y, mode='same')
-    n = len(ccf)
-    half = n // 2
-    start = max(half - max_lag, 0)
-    end = min(half + max_lag, n)
-    lags = np.arange(start - half, end - half) / sr
-    return lags, ccf[start:end]
-
-def _xcorr_freq_domain(x: np.ndarray, y: np.ndarray, sr: float, max_lag: int, nfft: Optional[int], deconv=False) -> LagsAndCCF:
+def _xcorr_freq_domain(x: np.ndarray, y: np.ndarray, sr: float, max_lag: float, nfft: Optional[int], deconv=False) -> LagsAndCCF:
+    """
+    频域互相关/去卷积计算
+    
+    Args:
+        x, y: 输入信号
+        sr: 采样率 (Hz)
+        max_lag: 最大滞后时间（秒）
+        nfft: FFT长度
+        deconv: 如果为True，执行去卷积；如果为False，执行标准互相关
+        
+    Returns:
+        lags: 时间滞后数组（秒）
+        ccf: 互相关/去卷积结果
+        
+    注意：
+    - 当 deconv=False: 计算标准互相关，用于信号相似性分析
+    - 当 deconv=True: 计算去卷积，用于系统辨识或反卷积
+    """
     length = len(x)
     if nfft is None:
-        from scipy.fftpack.helper import next_fast_len
+        from scipy.fftpack import next_fast_len
         nfft = next_fast_len(length)
 
     X = fft(x, n=nfft)
@@ -195,14 +270,14 @@ def _xcorr_freq_domain(x: np.ndarray, y: np.ndarray, sr: float, max_lag: int, nf
 
     # 提取 ±max_lag 范围
     center = nfft // 2
-    lag_in_samples = int(max_lag)
+    lag_in_samples = int(max_lag*sr)
     start = center - lag_in_samples
     end = center + lag_in_samples + 1
     lags = np.arange(-lag_in_samples, lag_in_samples + 1) / sr
     return lags, ccf_shifted[start:end]
 
 def _coherency(x: np.ndarray, y: np.ndarray, sr: float, max_lag: int, nfft: Optional[int]) -> LagsAndCCF:
-    """使用相干性作为权重的互相关（类似 PWS 的频域版本）"""
+    """使用相干性作为权重的互相关（类似 PWS 的频域版本），提高互相关结果的可靠性"""
     lags, ccf_raw = _xcorr_freq_domain(x, y, sr, max_lag, nfft, deconv=False)
     
     # 在频域计算相位一致性
@@ -210,52 +285,3 @@ def _coherency(x: np.ndarray, y: np.ndarray, sr: float, max_lag: int, nfft: Opti
     phase = np.exp(1j * np.angle(Cxy))
     coh = np.abs(np.mean(phase)) ** 4  # 权重
     return lags, ccf_raw * coh
-
-
-# -----------------------------
-# 工具函数：多段叠加（Sub-stacking）
-# -----------------------------
-
-def sub_stack_ccfs(
-    trace_pairs: List[Tuple[ArrayLike, ArrayLike]],
-    sampling_rate: float,
-    method: str = 'linear',
-    segment_length: float = 3600.0,
-    step: float = 1800.0,
-    **kwargs
-) -> LagsAndCCF:
-    """
-    对长时间连续数据分段做互相关后进行子叠加（sub-stacking）
-
-    Args:
-        trace_pairs: 多组 (x, y) 数据对（如每小时一段）
-        sampling_rate: 采样率
-        method: 叠加方法（见 stacking.stack_ccfs）
-        segment_length: 每段长度（秒）
-        step: 步长（用于非整除情况）
-        **kwargs: 传递给 compute_cross_correlation 的参数
-
-    Returns:
-        最终叠加的 CCF
-    """
-    ccfs = []
-    duration = len(trace_pairs[0][0]) / sampling_rate
-    n_per_segment = int(segment_length * sampling_rate)
-    n_step = int(step * sampling_rate)
-
-    for i in range(0, len(trace_pairs[0][0]) - n_per_segment + 1, n_step):
-        seg_x = [x[i:i+n_per_segment] for x, _ in trace_pairs]
-        seg_y = [y[i:i+n_per_segment] for _, y in trace_pairs]
-
-        for sx, sy in zip(seg_x, seg_y):
-            if len(sx) < 10: continue
-            _, ccf = compute_cross_correlation(sx, sy, sampling_rate, **kwargs)
-            ccfs.append(ccf)
-
-    if not ccfs:
-        raise ValueError("No valid segments generated for stacking")
-
-    # 使用 stacking 模块统一叠加
-    final_ccf = stack_ccfs(ccfs, method=method)
-    # 假设所有 CCF 具有相同的 lags
-    return np.linspace(-len(final_ccf)//2, len(final_ccf)//2, len(final_ccf)) / sampling_rate, final_ccf
