@@ -207,12 +207,172 @@ class NoFreqNorm(FreqNormalizer):
         return data.copy()
 
 
+class PowerLawWhitening(FreqNormalizer):
+    """
+    幂谱白化（Power-law Spectral Whitening）
+
+    X(ω) -> X(ω) / |X(ω)|^alpha
+    alpha = 1   : 完全白化
+    alpha = 0   : 不白化
+    """
+    def __init__(self, alpha: float = 0.5, eps: float = 1e-10):
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError("alpha must be in [0, 1]")
+        self.alpha = alpha
+        self.eps = eps
+
+    def apply(self, data: np.ndarray) -> np.ndarray:
+        if self._check_empty_input(data):
+            return data.copy()
+
+        FFT = np.fft.fft(data)
+        amp = np.abs(FFT)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            weight = 1.0 / np.power(amp + self.eps, self.alpha)
+
+        whitened = FFT * weight
+        return np.fft.ifft(whitened).real
+    
+
+class BandwiseFreqNorm(FreqNormalizer):
+    """
+    频带分段归一化（Band-wise Frequency Normalization）
+
+    将频谱划分为多个子频带，
+    每个频带内用 RMS 或均值归一化
+    """
+    def __init__(
+        self,
+        bands: list,
+        Fs: float,
+        method: str = "rms",
+        eps: float = 1e-10
+    ):
+        """
+        Args:
+            bands: [(fmin1, fmax1), (fmin2, fmax2), ...]
+            Fs: 采样率
+            method: 'rms' or 'mean'
+        """
+        self.bands = bands
+        self.Fs = Fs
+        self.method = method
+        self.eps = eps
+
+        if method not in ("rms", "mean"):
+            raise ValueError("method must be 'rms' or 'mean'")
+
+    def apply(self, data: np.ndarray) -> np.ndarray:
+        if self._check_empty_input(data):
+            return data.copy()
+
+        n = len(data)
+        FFT = np.fft.fft(data)
+        freqs = np.fft.fftfreq(n, d=1.0 / self.Fs)
+
+        FFT_norm = FFT.copy()
+
+        for fmin, fmax in self.bands:
+            idx = np.where((np.abs(freqs) >= fmin) & (np.abs(freqs) <= fmax))[0]
+            if len(idx) == 0:
+                continue
+
+            amp = np.abs(FFT[idx])
+            if self.method == "rms":
+                scale = np.sqrt(np.mean(amp ** 2))
+            else:
+                scale = np.mean(amp)
+
+            FFT_norm[idx] /= (scale + self.eps)
+
+        return np.fft.ifft(FFT_norm).real
+    
+
+class ReferenceSpectrumNorm(FreqNormalizer):
+    """
+    参考谱归一化（Reference Spectrum Normalization）
+
+    X(ω) -> X(ω) * A_ref(ω) / A_obs(ω)
+    
+    Args:
+        ref_spectrum: 参考幅度谱（长度需与 FFT 一致）
+    """
+    def __init__(
+        self,
+        ref_spectrum: np.ndarray,
+        eps: float = 1e-10
+    ):
+
+        self.ref_spectrum = ref_spectrum
+        self.eps = eps
+
+    def apply(self, data: np.ndarray) -> np.ndarray:
+        if self._check_empty_input(data):
+            return data.copy()
+
+        FFT = np.fft.fft(data)
+        amp = np.abs(FFT)
+
+        if len(self.ref_spectrum) != len(amp):
+            raise ValueError("Reference spectrum length mismatch")
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            weight = self.ref_spectrum / (amp + self.eps)
+
+        FFT_norm = FFT * weight
+        return np.fft.ifft(FFT_norm).real
+
+
+class ClippedSpectralWhitening(FreqNormalizer):
+    """
+    自适应频谱截断白化（Clipped Spectral Whitening）
+
+    对白化权重设置上下限，避免数值不稳定
+    """
+    def __init__(
+        self,
+        smooth_win: int = 20,
+        min_weight: float = 0.1,
+        max_weight: float = 10.0
+    ):
+        self.smooth_win = smooth_win
+        self.min_weight = min_weight
+        self.max_weight = max_weight
+
+    def _smooth(self, x: np.ndarray) -> np.ndarray:
+        if len(x) < self.smooth_win:
+            return x
+        kernel = np.ones(self.smooth_win) / self.smooth_win
+        return np.convolve(x, kernel, mode="same")
+
+    def apply(self, data: np.ndarray) -> np.ndarray:
+        if self._check_empty_input(data):
+            return data.copy()
+
+        FFT = np.fft.fft(data)
+        amp = np.abs(FFT)
+        smoothed = self._smooth(amp)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            weight = 1.0 / smoothed
+
+        weight = np.clip(weight, self.min_weight, self.max_weight)
+        FFT_w = FFT * weight
+
+        return np.fft.ifft(FFT_w).real
+    
+
 # 更新映射表
 _FREQ_NORM_MAP = {
     'whiten': SpectralWhitening,
     'rma': RmaFreqNorm,
     'bandwhiten': BandWhitening,
     'no': NoFreqNorm,
+    'powerlaw': PowerLawWhitening,
+    'bandwise': BandwiseFreqNorm,
+    'refspectrum': ReferenceSpectrumNorm,
+    'clipwhiten': ClippedSpectralWhitening,
 }
 
 
@@ -249,6 +409,40 @@ def get_freq_normalizer(name: str, **kwargs) -> FreqNormalizer:
             raise ValueError("BandWhitening requires freq_min, freq_max, and Fs parameters")
             
         return cls(freq_min=freq_min, freq_max=freq_max, Fs=Fs)
+    
+    elif name.lower() == 'powerlaw':
+        return cls(alpha=kwargs.get('alpha', 0.5))
+    
+    elif name.lower() == 'bandwise':
+        # BandwiseFreqNorm 需要特定参数
+        bands = kwargs.get('bands')
+        Fs = kwargs.get('Fs')
+        
+        if bands is None or Fs is None:
+            raise ValueError("BandwiseFreqNorm requires bands and Fs parameters")
+            
+        return cls(
+            bands=bands,
+            Fs=Fs,
+            method=kwargs.get('method', 'rms')
+        )
+    
+    elif name.lower() == 'refspectrum':
+        # ReferenceSpectrumNorm 需要特定参数
+        ref_spectrum = kwargs.get('ref_spectrum')
+        
+        if ref_spectrum is None:
+            raise ValueError("ReferenceSpectrumNorm requires ref_spectrum parameter")
+            
+        return cls(ref_spectrum=ref_spectrum)
+    
+    elif name.lower() == 'clipwhiten':
+        return cls(
+            smooth_win=kwargs.get('smooth_win', 20),
+            min_weight=kwargs.get('min_weight', 0.1),
+            max_weight=kwargs.get('max_weight', 10.0)
+        )
+    
     else:
         # 其他归一化方法使用默认构造函数
         return cls()
