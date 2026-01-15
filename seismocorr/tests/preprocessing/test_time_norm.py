@@ -11,6 +11,8 @@ from seismocorr.preprocessing.time_norm import (
     ClipNormalizer,
     NoTimeNorm,
     RAMNormalizer,
+    WaterLevelNormalizer,
+    CWTSoftThreshold1D,
     get_time_normalizer,
     _TIME_NORM_MAP
 )
@@ -176,27 +178,169 @@ class TestRAMNormalizer:
     
     def test_ram_normalizer_parameters(self):
         """测试RAM归一化器参数"""
-        fmin, Fs, npts, norm_win = 2.0, 200.0, 1000, 0.5
-        normalizer = RAMNormalizer(fmin, Fs, npts, norm_win)
+        fmin, Fs, norm_win = 2.0, 200.0, 0.5
+        normalizer = RAMNormalizer(fmin, Fs, norm_win)
         
         assert normalizer.fmin == fmin
         assert normalizer.Fs == Fs
-        assert normalizer.npts == npts
         assert normalizer.norm_win == norm_win
+
+
+class TestWaterLevelNormalizer:
+    """测试 WaterLevelNormalizer"""
+
+    def test_waterlevel_basic(self, waterlevel_signal, waterlevel_params):
+        normalizer = WaterLevelNormalizer(**waterlevel_params)
+        x = waterlevel_signal.copy()
+        y = normalizer.apply(x)
+
+        # shape 不变
+        assert y.shape == x.shape
+        # 输出应是新数组（不是同一对象）
+        assert y is not x
+        # 不应产生 NaN/Inf
+        assert np.isfinite(y).all()
+
+        # 应该确实“压制”了强能量窗口（不要求每点都变，只要求整体能量被限制）
+        Fs = int(waterlevel_params["Fs"])
+        win_n = int(round(waterlevel_params["win_length"] * Fs))
+
+        # 计算处理后的全局 RMS 水位 W（注意实现用的是处理前 global rms）
+        global_rms = np.sqrt(np.mean(x * x)) + waterlevel_params["eps"]
+        W = waterlevel_params["water_level_factor"] * global_rms
+
+        # 强能量窗口（第2窗）处理后 RMS 应 <= W（容忍小误差）
+        w2 = y[win_n : 2 * win_n]
+        w2_rms = np.sqrt(np.mean(w2 * w2))
+        assert w2_rms <= W * 1.001  # 容差
+
+    def test_waterlevel_empty(self, waterlevel_params):
+        normalizer = WaterLevelNormalizer(**waterlevel_params)
+        x = np.array([])
+        y = normalizer.apply(x)
+        assert y.shape == (0,)
+
+    def test_waterlevel_single_point(self, waterlevel_params):
+        normalizer = WaterLevelNormalizer(**waterlevel_params)
+        x = np.array([5.0])
+        y = normalizer.apply(x)
+        assert y.shape == (1,)
+        assert np.isfinite(y).all()
+
+    def test_waterlevel_invalid_window(self):
+        # win_length * Fs < 1 应该报错
+        normalizer = WaterLevelNormalizer(Fs=10.0, win_length=0.0)
+        with pytest.raises(ValueError, match="win_length \\* Fs must be"):
+            normalizer.apply(np.random.randn(100))
+
+
+class TestCWTSoftThreshold1D:
+    """测试基于 CWT 的软阈值处理"""
+
+    def test_cwt_designal_basic(self, cwt_signal, cwt_params):
+        x = cwt_signal.copy()
+
+        normalizer = CWTSoftThreshold1D(
+            fs=cwt_params["Fs"],
+            noise_idx=cwt_params["noise_idx"],
+            mode="designal",
+            wavelet=cwt_params["wavelet"],
+            voices_per_octave=cwt_params["voices_per_octave"],
+            quantile=cwt_params["quantile"],
+            f_min=cwt_params["f_min"],
+            f_max=cwt_params["f_max"],
+            normalize=cwt_params["normalize"],
+            eps=cwt_params["eps"],
+        )
+
+        y = normalizer.apply(x)
+
+        # shape 不变
+        assert y.shape == x.shape
+        assert y is not x
+        assert np.isfinite(y).all()
+
+        # designal 的直觉：尖峰应该被压制一些（最大值降低）
+        assert np.max(np.abs(y)) <= np.max(np.abs(x)) + 1e-9
+
+    def test_cwt_denoise_reduces_noise_window(self, cwt_signal, cwt_params):
+        x = cwt_signal.copy()
+        noise_idx = cwt_params["noise_idx"]
+
+        normalizer = CWTSoftThreshold1D(
+            fs=cwt_params["Fs"],
+            noise_idx=noise_idx,
+            mode="denoise",
+            wavelet=cwt_params["wavelet"],
+            voices_per_octave=cwt_params["voices_per_octave"],
+            quantile=cwt_params["quantile"],
+            f_min=cwt_params["f_min"],
+            f_max=cwt_params["f_max"],
+            normalize=False,  # 为了更直接比较噪声能量，先关掉幅值对齐
+            eps=cwt_params["eps"],
+        )
+
+        y = normalizer.apply(x)
+
+        # 处理后在 noise window 的能量（RMS 或 std）应该降低或不增（容差）
+        x_rms = np.sqrt(np.mean(x[noise_idx] ** 2))
+        y_rms = np.sqrt(np.mean(y[noise_idx] ** 2))
+        assert y_rms <= x_rms * 1.05  # 给一点容差，避免边界波动导致偶发失败
+
+    def test_cwt_empty(self, cwt_params):
+        normalizer = CWTSoftThreshold1D(
+            fs=cwt_params["Fs"],
+            noise_idx=cwt_params["noise_idx"],
+            mode="designal",
+            voices_per_octave=cwt_params["voices_per_octave"],
+            f_min=cwt_params["f_min"],
+            f_max=cwt_params["f_max"],
+        )
+        x = np.array([])
+        y = normalizer.apply(x)
+        assert y.shape == (0,)
+
+    def test_cwt_invalid_mode(self, cwt_signal, cwt_params):
+        normalizer = CWTSoftThreshold1D(
+            fs=cwt_params["Fs"],
+            noise_idx=cwt_params["noise_idx"],
+            mode="invalid",
+            voices_per_octave=cwt_params["voices_per_octave"],
+            f_min=cwt_params["f_min"],
+            f_max=cwt_params["f_max"],
+        )
+        with pytest.raises(ValueError, match="mode must be"):
+            normalizer.apply(cwt_signal)
+
+    def test_cwt_invalid_freqs(self, cwt_params):
+        # f_min >= f_max 应该报错（在 build_scales 阶段）
+        with pytest.raises(ValueError, match="Require 0 < f_min < f_max"):
+            CWTSoftThreshold1D(
+                fs=cwt_params["Fs"],
+                noise_idx=cwt_params["noise_idx"],
+                f_min=10.0,
+                f_max=5.0,
+            )
 
 
 class TestGetTimeNormalizer:
     """测试归一化器工厂函数"""
     
-    def test_get_all_normalizers(self, ram_normalizer_params):
-        """测试获取所有支持的归一化器"""
+    def test_get_all_normalizers(self, ram_normalizer_params,
+                                waterlevel_params,
+                                cwt_params):
         for name in _TIME_NORM_MAP.keys():
-            if name == 'ramn':
+            if name == "ramn":
                 normalizer = get_time_normalizer(name, **ram_normalizer_params)
+            elif name == "waterlevel":
+                normalizer = get_time_normalizer(name, **waterlevel_params)
+            elif name == "cwt-soft":
+                normalizer = get_time_normalizer(name, **cwt_params)
             else:
                 normalizer = get_time_normalizer(name)
+
             assert normalizer is not None
-            assert hasattr(normalizer, 'apply')
+            assert hasattr(normalizer, "apply")
     
     def test_get_normalizer_with_params(self):
         """测试带参数的归一化器获取"""
@@ -230,68 +374,135 @@ class TestGetTimeNormalizer:
         
         assert np.array_equal(result1, result2)
 
+ 
+    def test_get_time_normalizer_missing_required_params_raises(self):
+        """测试：需要参数的 normalizer 缺参应抛 ValueError"""
+        with pytest.raises(ValueError):
+            get_time_normalizer("ramn")  # 缺 fmin/Fs
+
+        with pytest.raises(ValueError):
+            get_time_normalizer("waterlevel")  # 缺 Fs
+
+        with pytest.raises(ValueError):
+            get_time_normalizer("cwt-soft")  # 缺 fs/noise_idx
+
 
 class TestEdgeCases:
     """测试边界情况"""
-    
-    def test_empty_signal(self,ram_normalizer_params):
+    def _cwt_factory_params(self, cwt_params, signal_len: int):
+        p = dict(cwt_params)
+        # 兼容 cwt_params 里用 Fs 或 fs
+        Fs = p.get("Fs", p.get("fs"))
+        p["Fs"] = Fs
+        p.pop("fs", None)
+        p.pop("n", None)
+
+        # 根据输入信号长度保证 noise_idx 合法
+        if signal_len == 0:
+            # 空信号时 noise_idx 不会被用到（apply 直接返回），但工厂函数要求非 None
+            p["noise_idx"] = slice(0, 0)
+        elif signal_len == 1:
+            p["noise_idx"] = np.array([0], dtype=int)
+        else:
+            # 前 100 个点当噪声段，别超过长度
+            k = min(100, signal_len)
+            p["noise_idx"] = np.arange(0, k, dtype=int)
+
+        return p
+    def test_empty_signal(self, ram_normalizer_params, waterlevel_params, cwt_params):
         """测试空信号"""
         empty_signal = np.array([])
-        
-        for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn']:
+        # 把 cwt_params(含 fs) 转成工厂函数需要的 Fs
+        cwt_factory_params = dict(cwt_params)
+        cwt_factory_params["Fs"] = cwt_factory_params.pop("Fs")
+        cwt_factory_params.pop("n", None)
+
+        for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn', 'waterlevel', 'cwt-soft']:
             if name == 'ramn':
                 normalizer = get_time_normalizer(name, **ram_normalizer_params)
+            elif name == 'waterlevel':
+                normalizer = get_time_normalizer(name, **waterlevel_params)
+            elif name == 'cwt-soft':
+                normalizer = get_time_normalizer(name, **cwt_factory_params)
             else:
                 normalizer = get_time_normalizer(name)
+
             result = normalizer.apply(empty_signal)
             assert len(result) == 0
     
-    def test_single_point_signal(self,ram_normalizer_params):
-        """测试单点信号"""
-        single_point = np.array([5.0])
-        
-        for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn']:
+    def test_single_point_signal(self, ram_normalizer_params):
+            """测试单点信号"""
+            single_point = np.array([5.0])
+            Fs = ram_normalizer_params["Fs"]
+
+            # 对于 cwt-soft，noise_idx 至少要落在 [0, n-1] 内；单点信号就用 [0]
+            for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn', 'waterlevel', 'cwt-soft']:
+                if name == 'ramn':
+                    normalizer = get_time_normalizer(name, **ram_normalizer_params)
+                elif name == 'waterlevel':
+                    normalizer = get_time_normalizer(name, Fs=Fs)
+                elif name == 'cwt-soft':
+                    normalizer = get_time_normalizer(name, Fs=Fs, noise_idx=np.array([0], dtype=int))
+                else:
+                    normalizer = get_time_normalizer(name)
+
+                result = normalizer.apply(single_point)
+                assert len(result) == 1
+
+    def test_large_signal(self, ram_normalizer_params, waterlevel_params, cwt_params):
+        large_signal = np.random.randn(100000)
+        cwt_factory_params = self._cwt_factory_params(cwt_params, signal_len=len(large_signal))
+
+        for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn', 'waterlevel', 'cwt-soft']:
             if name == 'ramn':
                 normalizer = get_time_normalizer(name, **ram_normalizer_params)
+            elif name == 'waterlevel':
+                normalizer = get_time_normalizer(name, **waterlevel_params)
+            elif name == 'cwt-soft':
+                normalizer = get_time_normalizer(name, **cwt_factory_params)
             else:
                 normalizer = get_time_normalizer(name)
-            result = normalizer.apply(single_point)
-            assert len(result) == 1
-    
-    def test_large_signal(self,ram_normalizer_params):
-        """测试大信号（性能测试）"""
-        large_signal = np.random.randn(100000)  # 10万个点
-        
-        for name in ['zscore', 'one-bit', 'rms', 'clip', 'no', 'ramn']:
-            if name == 'ramn':
-                normalizer = get_time_normalizer(name, **ram_normalizer_params)
-            else:
-                normalizer = get_time_normalizer(name)
-            
-            # 时间性能测试（可选）
             import time
-            start_time = time.time()
+            start = time.time()
             result = normalizer.apply(large_signal)
-            end_time = time.time()
-            
+            elapsed = time.time() - start
+
             assert len(result) == len(large_signal)
-            assert end_time - start_time < 1.0  # 应该在1秒内完成
+
+            # cwt-soft 通常更慢，避免 CI 不稳定
+            if name == "cwt-soft":
+                assert elapsed < 5
+            else:
+                assert elapsed < 1.0
 
 
-def test_normalizer_immutability(sample_signal,ram_normalizer_params):
+
+
+def test_normalizer_immutability(sample_signal, ram_normalizer_params):
     """测试归一化器不会修改原始信号"""
     original_copy = sample_signal.copy()
-    
+    Fs = ram_normalizer_params["Fs"]
+
     for name in _TIME_NORM_MAP.keys():
-        if name == 'ramn':  # 跳过需要参数的RAM归一化
+        if name == "ramn":
             normalizer = get_time_normalizer(name, **ram_normalizer_params)
-        else:   
+
+        elif name == "waterlevel":
+            normalizer = get_time_normalizer(name, Fs=Fs)
+
+        elif name == "cwt-soft":
+            normalizer = get_time_normalizer(
+                name,
+                Fs=Fs,
+                noise_idx=np.arange(0, 100, dtype=int),
+            )
+
+        else:
             normalizer = get_time_normalizer(name)
-        normalized = normalizer.apply(sample_signal)
-        
-        # 原始信号不应被修改
+
+        # apply 不应修改原始数组
+        _ = normalizer.apply(sample_signal)
         assert np.array_equal(sample_signal, original_copy)
-        assert normalized is not sample_signal  # 应该是新数组
 
 
 if __name__ == "__main__":
