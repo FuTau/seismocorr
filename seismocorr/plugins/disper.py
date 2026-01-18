@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from enum import Enum
 import numpy as np
-from scipy.special import hankel2, j0, j1, jn_zeros
 from matplotlib import pyplot as plt
 from numba import jit
 from dataclasses import dataclass
 from typing import Tuple, Optional, Callable
+from .fj_helper_func import fj, fj_rr, mfj_rr
+from scipy.special import j0, j1, jn_zeros
 
 @dataclass
 class DispersionConfig:
@@ -33,9 +34,7 @@ class DispersionMethod(Enum):
     FJ_RR = "fj_rr"
     MFJ_RR = "mfj_rr"
     SLANT_STACK = "slant_stack"
-    SPAC = "spac"
     MASW = "masw"
-    ZERO_CROSSING = "zero_crossing"
 
 class DispersionStrategy(ABC):
     """频散成像策略基类"""
@@ -59,22 +58,18 @@ class FJ(DispersionStrategy):
     def compute(self, cc_array_f: np.ndarray, f: np.ndarray, 
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
-        w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)), dtype=complex)
         
-        for i, fi in enumerate(f):
-            if fi == 0:
-                continue
-            FJ_array = np.zeros(len(v), dtype=complex)
-            y0 = cc_array_f[:, i]
-            
-            for j, vj in enumerate(v):
-                k1 = 2 * np.pi * fi / vj
-                m1 = j0(k1 * dist)
-                FJ_array[j] = m1 @ (y0 * w) * (2 * np.pi * fi) ** 2 / vj**3
-                
-            spec[i, :] = FJ_array
-            
+        # 准备fj_python函数所需的参数
+        U_f = np.real(cc_array_f).astype(np.float32).flatten()  # 转换为一维数组，与helper_func.py中的实现一致
+        r = dist
+        c = v.astype(np.float32)
+        nc = len(v)
+        nr = len(r)
+        nf = len(f)
+        
+        # 使用helper_func.py中的fj_python函数计算频散谱
+        spec = fj(U_f, r, f, c, nc, nr, nf)
+
         return spec
 
 class FJ_RR(DispersionStrategy):
@@ -83,22 +78,18 @@ class FJ_RR(DispersionStrategy):
     def compute(self, cc_array_f: np.ndarray, f: np.ndarray, 
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
-        w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)), dtype=complex)
         
-        for i, fi in enumerate(f):
-            if fi == 0:
-                continue
-            FJ_array = np.zeros(len(v), dtype=complex)
-            y0 = cc_array_f[:, i]
-            
-            for j, vj in enumerate(v):
-                k1 = 2 * np.pi * fi / vj
-                m1 = j1(k1 * dist)
-                FJ_array[j] = m1 @ (y0 * w) * (2 * np.pi * fi) ** 2 / vj**3
-                
-            spec[i, :] = FJ_array
-            
+        # 准备fj_rr函数所需的参数
+        U_f = np.real(cc_array_f).flatten()  # 转换为一维数组
+        r = dist
+        c = v
+        nc = len(v)
+        nr = len(r)
+        nf = len(f)
+        
+        # 使用fj_helper_func.py中的fj_rr函数计算频散谱
+        spec = fj_rr(U_f, r, f, c, nc, nr, nf)
+        
         return spec
 
 class MFJ_RR(DispersionStrategy):
@@ -107,152 +98,147 @@ class MFJ_RR(DispersionStrategy):
     def compute(self, cc_array_f: np.ndarray, f: np.ndarray, 
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
         v = np.linspace(config.vmin, config.vmax, config.vnum)
-        w = self._calculate_weights(dist)
-        spec = np.zeros((len(f), len(v)), dtype=complex)
         
-        for i, fi in enumerate(f):
-            if fi == 0:
-                continue
-            FJ_array = np.zeros(len(v), dtype=complex)
-            y0 = cc_array_f[:, i]
-            
-            for j, vj in enumerate(v):
-                k1 = 2 * np.pi * fi / vj
-                m1 = hankel2(1, k1 * dist)
-                FJ_array[j] = m1 @ (y0 * w) * (2 * np.pi * fi) ** 2 / vj**3
-                
-            spec[i, :] = FJ_array
-            
+        # 准备mfj_rr函数所需的参数
+        U_f = np.real(cc_array_f).flatten()  # 转换为一维数组
+        r = dist
+        c = v
+        nc = len(v)
+        nr = len(r)
+        nf = len(f)
+        
+        # 使用fj_helper_func.py中的mfj_rr函数计算频散谱
+        spec = mfj_rr(U_f, r, f, c, nc, nr, nf)
+        
         return spec
 
 class SlantStack(DispersionStrategy):
     """Slant_stack方法策略"""
     
-    def compute(self, cc_array_f: np.ndarray, f: np.ndarray, 
+    def compute(self, cc_array_f: np.ndarray, freq: np.ndarray, 
                 dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
-        v = np.linspace(config.vmin, config.vmax, config.vnum)
-        w = np.sqrt(dist.copy())
-        spec = np.zeros((len(f), len(v)), dtype=complex)
         
-        for i, fi in enumerate(f):
-            slant_stack_array = np.zeros(len(v), dtype=complex)
-            y0 = cc_array_f[:, i]
-            y2 = y0 @ (y0 * w)
+        # 计算最大慢度
+        p_max = 1.0 / config.vmin
+        
+        # 试算慢度值
+        q = np.linspace(0, p_max, config.vnum + 1)
+        nq = len(q)
+        
+        # 初始化功率谱
+        pnorm = np.zeros((len(freq), len(q)))
+        
+        # 遍历每个频率
+        for n in range(len(freq)):
+            omega = 2 * np.pi * freq[n]
             
-            for j, vj in enumerate(v):
-                k1 = 2 * np.pi * fi / vj
-                m1_cos = np.cos(k1 * dist)
-                m1_sin = np.sin(k1 * dist)
-                cross = (m1_cos @ (y0 * w)) ** 2 + (m1_sin @ (y0 * w)) ** 2
-                slant_stack_array[j] = cross
-                
-            spec[i, :] = slant_stack_array/y2
+            # 构建线性Radon变换矩阵
+            L = np.exp(-1j * omega * np.outer(dist, q))
             
-        return spec
+            # 执行Radon变换
+            y = cc_array_f[:, n]
+            x = np.dot(L.conj().T, y)
+            
+            # 计算功率
+            pnorm[n, :] = np.abs(x) ** 2
+            
+            # 归一化功率
+            max_power = np.nanmax(pnorm[n, :])
+            if max_power > 0:
+                pnorm[n, :] /= max_power
+        
+        # 找到峰值慢度
+        p_peak = np.zeros(len(freq))
+        for n in range(len(freq)):
+            max_id = np.nanargmax(pnorm[n, :])
+            p_peak[n] = np.max([q[max_id], 1e-10])  # 避免零慢度
+        
+        # 转换为速度
+        v_peak = 1.0 / p_peak
+        
+        # 移除慢度为0的分量
+        q = q[1:]
+        v_vals = 1.0 / q
+        pnorm = pnorm[:, 1:].T  # 转置为(vnum, nf)
 
-class SPAC(DispersionStrategy):
-    """SPAC方法策略"""
-    
-    def compute(self, cc_array_f: np.ndarray, f: np.ndarray, 
-                dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
-        v = np.linspace(config.vmin, config.vmax, config.vnum)
-        dist_km = dist / 1000  # 转换为公里
-        spec = np.zeros((len(f), len(v)), dtype=complex)
-        
-        for i, fi in enumerate(f):
-            if fi == 0:
-                continue
-            vr0 = np.zeros(len(v), dtype=complex)
-            y0 = cc_array_f[:, i]
-            y2 = y0 @ y0
-            
-            for j, vj in enumerate(v):
-                k1 = 2 * np.pi * fi / vj
-                m1 = j0(k1 * dist_km)
-                m2 = m1 @ m1
-                cross = m1 @ y0
-                vr0[j] = 1 - (np.real(y2) - cross**2 / m2) / np.real(y2)
-                
-            spec[i, :] = vr0
-            
-        return spec
+        return pnorm
 
 class MASW(DispersionStrategy):
     """MASW方法策略"""
     
-    def compute(self, u: np.ndarray, f: np.ndarray, dist: np.ndarray, 
-                config: DispersionConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        '''
-        :param u: [npts, N],ccfs in time domain
-        :param N: the number of ccfs
-        :param x: dists
-        :param fs: sampling rate of ccfs
-        :param cT_min: the min value of phase velocity
-        :param cT_max: the max value of phase velocity
-        :param delta_cT: the linspace of phase velocity
-        :return: Spectrum from Phase shift Method
-        '''
-        # Converting measuring frequency from Hz to rad/sec
-        omega_fs = 2 * np.pi * config.sampling_rate
-        N = len(u[0, :])  # Number of ccfs
-
-        # Number of samples in each trace
-        Lu = len(u[:, 0])
-
-        # Empty matrices with Lu lines and N columns
-        U = np.zeros((Lu, N), dtype=complex)
-        P = np.zeros((Lu, N), dtype=complex)
-        Unorm = np.zeros((Lu, N), dtype=complex)
-
-        # Apply discrete Fourier transform to the time axis of u
-        for j in range(N):
-            U[:, j] = np.fft.fft(u[:, j])
-
-        # Number of samples in each transformed trace
-        LU = len(U[0, :])
-
-        # Normalize U in offset and frequency domains
-        # Compute the phase spectrum of U
-        i = 1j
-        for j in range(N):
-            for k in range(LU):
-                Unorm[k, j] = U[k, j] / np.abs(U[k, j])
-            P[:, j] = np.exp(-i * np.angle(U[:, j]))
-
-        # Frequency range for U
-        omega = np.arange(0, LU) * (omega_fs / LU)
-
-        # Compute the slant-stack (summed) amplitude corresponding to each set of omega and cT, A(omega,cT)
-        cT = np.linspace(config.vmin, config.vmax, config.vnum)  # Testing Rayleigh wave phase velocity [m/s]
-        LcT = len(cT)
-
-        # Empty matrices with LU lines and LcT columns
-        c = np.zeros((LU, LcT))
-        f = np.zeros((LU, LcT))
-        A = np.zeros((LU, LcT))
-
-        for j in range(LU):  # Frequency component j
-            for k in range(LcT):  # Testing Rayleigh wave phase velocity k
-                # Frequency (in [Hz]) corresponding to angular frequency omega
-                f[j, k] = omega[j] / (2 * np.pi)
-                # Testing phase velocity [m/s]
-                c[j, k] = cT[k]
-                # Determining the amount of phase shifts required to counterbalance
-                # the time delay corresponding to specific offsets for a given set
-                # of omega and cT
-                delta = omega[j] / cT[k]
-                # Applying the phase shifts (delta) to distinct traces of the
-                # transformed shot gather
-                # Obtaining the (normalized) slant-stack (summed) amplitude
-                # corresponding to each set of omega and cT
-                temp = 0
-                for l in range(N):
-                    temp = temp + np.exp(-i * delta * dist[l]) * P[j, l]
-                # Compute absolute value and normalize with respect to number of
-                # receivers
-                A[j, k] = np.abs(temp) / N
-
-        return f[0], cT, A
+    def compute(self, cc_array_f: np.ndarray, freq: np.ndarray,
+         dist: np.ndarray, config: DispersionConfig) -> np.ndarray:
+        """
+        相移法频散提取
+        参考: Park et al. (1998), MASWaves_dispersion_imaging
+        
+        Args:
+            cc_array_f: 频域互相关数据或时域数据
+            freq: 频率数组，如果为None且输入为时域数据则自动计算
+            dist: 台站距离数组
+            config: 频散配置
+            
+        Returns:
+            频散谱
+        """
+        # 试算速度
+        v_vals = np.linspace(config.vmin, config.vmax, config.vnum)
+        
+        # 如果输入是时域数据且freq为None，则计算频率
+        if freq is None:
+            # 假设输入是时域数据，计算FFT
+            n_samples, n_stations = cc_array_f.shape
+            
+            # 计算频率数组
+            freq = np.fft.fftfreq(n_samples, d=1/config.sampling_rate)
+            freq = freq[:n_samples//2]  # 只保留正频率
+            
+            # 将时域数据转换为频域数据
+            cc_array_f_fft = np.fft.fft(cc_array_f, axis=0)[:n_samples//2, :]
+            n_stations = cc_array_f_fft.shape[1]
+        else:
+            # 输入是频域数据，检查形状
+            if cc_array_f.shape[0] == len(dist):
+                # 形状为(n_stations, n_freq)，转置为(n_freq, n_stations)
+                cc_array_f_fft = cc_array_f.T
+                n_stations = cc_array_f.shape[0]
+            else:
+                # 形状为(n_freq, n_stations)，直接使用
+                cc_array_f_fft = cc_array_f
+                n_stations = cc_array_f.shape[1]
+        
+        # 初始化功率谱
+        power = np.zeros((len(v_vals), len(freq)))
+        
+        # 接收道数
+        N = len(dist)
+        
+        # 遍历每个频率
+        for c in range(len(freq)):
+            # 跳过频率为0的情况
+            if freq[c] <= 0:
+                continue
+            
+            # 遍历每个试算速度
+            for r in range(len(v_vals)):
+                delta = 2 * np.pi * freq[c] / v_vals[r]
+                
+                # 计算相位移位因子
+                phase_term = np.exp(-1j * delta * dist)
+                
+                # 避免除以零
+                cc_amp = np.abs(cc_array_f_fft[c, :])
+                if np.all(cc_amp == 0):
+                    continue
+                    
+                normalized_cc = cc_array_f_fft[c, :] / cc_amp
+                conj_normalized_cc = np.conj(normalized_cc)
+                temp = np.sum(phase_term * conj_normalized_cc)
+                
+                # 计算绝对振幅并归一化
+                power[r, c] = np.abs(temp) / N
+        
+        return power
 
 
 class DispersionFactory:
@@ -266,7 +252,6 @@ class DispersionFactory:
             DispersionMethod.FJ_RR: FJ_RR,
             DispersionMethod.MFJ_RR: MFJ_RR,
             DispersionMethod.SLANT_STACK: SlantStack,
-            DispersionMethod.SPAC: SPAC,
             DispersionMethod.MASW: MASW,
         }
         
@@ -285,7 +270,10 @@ class DispersionAnalyzer:
     
     def analyze(self, *args, **kwargs) -> np.ndarray:
         """执行频散分析"""
-        return self.strategy.compute(*args, **kwargs)
+        result = self.strategy.compute(*args, **kwargs)
+        
+        # MASW方法直接返回power数组，不需要特殊处理
+        return result
     
     def plot_spectrum(self, f: np.ndarray, c: np.ndarray, A: np.ndarray, 
                      plot_config: Optional[PlotConfig] = None, 
@@ -298,12 +286,33 @@ class DispersionAnalyzer:
         no_fmin = np.argmin(np.abs(f - fmin))
         no_fmax = np.argmin(np.abs(f - fmax))
         
-        Aplot = A[no_fmin:no_fmax, :]
-        fplot = f[no_fmin:no_fmax]
+        # 处理不同形状的A数组
+        if len(A.shape) == 3:
+            # MASW方法返回的A可能是3D数组，取第一维
+            A = A[:, :, 0]
+        elif A.shape[0] != len(f) or A.shape[1] != len(c):
+            # 如果A的形状不匹配，尝试转置
+            A = A.T
+        
+        # 确保A的形状是[nf, nc]
+        if A.shape[0] != len(f):
+            # 如果频率维度不匹配，可能需要调整
+            Aplot = A[:, no_fmin:no_fmax]
+            fplot = f[no_fmin:no_fmax]
+            # 转置Aplot以匹配预期形状
+            Aplot = Aplot.T
+        else:
+            # 正常情况
+            Aplot = A[no_fmin:no_fmax, :]
+            fplot = f[no_fmin:no_fmax]
         
         # 绘图
-        plt.pcolormesh(fplot, c, Aplot.T / np.max(np.abs(Aplot)), 
-                      cmap=config.cmap, vmin=config.vmin, vmax=config.vmax)
+        max_val = np.nanmax(np.abs(Aplot))
+        
+        
+        # 使用shading='nearest'来避免维度不匹配的问题
+        plt.pcolormesh(fplot, c, Aplot.T/max_val, 
+                      cmap=config.cmap, vmin=0, vmax=0.5, shading='nearest')
         plt.grid(True)
         
         # 坐标轴设置

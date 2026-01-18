@@ -16,7 +16,6 @@ from seismocorr.plugins.disper import (
     FJ_RR,
     MFJ_RR,
     SlantStack,
-    SPAC,
     MASW,
     DispersionFactory,
     DispersionAnalyzer
@@ -98,9 +97,7 @@ class TestDispersionMethod:
         assert DispersionMethod.FJ_RR.value == "fj_rr"
         assert DispersionMethod.MFJ_RR.value == "mfj_rr"
         assert DispersionMethod.SLANT_STACK.value == "slant_stack"
-        assert DispersionMethod.SPAC.value == "spac"
         assert DispersionMethod.MASW.value == "masw"
-        assert DispersionMethod.ZERO_CROSSING.value == "zero_crossing"
     
     def test_dispersion_method_from_string(self):
         """测试从字符串创建枚举"""
@@ -109,9 +106,7 @@ class TestDispersionMethod:
             "fj_rr": DispersionMethod.FJ_RR,
             "mfj_rr": DispersionMethod.MFJ_RR,
             "slant_stack": DispersionMethod.SLANT_STACK,
-            "spac": DispersionMethod.SPAC,
-            "masw": DispersionMethod.MASW,
-            "zero_crossing": DispersionMethod.ZERO_CROSSING
+            "masw": DispersionMethod.MASW
         }
         
         for name, method in methods.items():
@@ -247,7 +242,7 @@ class TestFJStrategy:
         )
         
         # 应该能正确处理零频率（跳过计算）
-        assert result.shape == (len(f_with_zero), dispersion_config.vnum)
+        assert result.shape == (dispersion_config.vnum, len(f_with_zero))
 
 
 class TestFJ_RRStrategy:
@@ -330,25 +325,6 @@ class TestSlantStackStrategy:
         
 
 
-class TestSPACStrategy:
-    """测试SPAC策略"""
-    
-    def test_spac_compute_basic(self, sample_dispersion_data, dispersion_config):
-        """测试SPAC基本计算"""
-        strategy = SPAC()
-        result = strategy.compute(
-            sample_dispersion_data['cc_array_f'],
-            sample_dispersion_data['f'],
-            sample_dispersion_data['dist'],
-            dispersion_config
-        )
-        
-        # 检查结果形状
-        assert result.shape == (len(sample_dispersion_data['f']), dispersion_config.vnum)
-        assert not np.any(np.isnan(result))
-        assert not np.any(np.isinf(result))
-
-
 class TestMASWStrategy:
     """测试MASW策略"""
     
@@ -359,11 +335,10 @@ class TestMASWStrategy:
         dist = masw_time_domain_data['dist']
         
         # MASW需要不同的参数
-        f_plot, cT, A = strategy.compute(u, None, dist, dispersion_config)
-        print(f_plot.shape, cT.shape, A.shape)
+        A = strategy.compute(u, None, dist, dispersion_config)
+        
         # 检查结果形状
-        assert len(f_plot) == A.shape[0]
-        assert len(cT) == A.shape[1]
+        assert A.shape == (dispersion_config.vnum, len(np.fft.fftfreq(u.shape[0], d=1/dispersion_config.sampling_rate)[:u.shape[0]//2]))
         assert not np.any(np.isnan(A))
         assert not np.any(np.isinf(A))
     
@@ -375,11 +350,13 @@ class TestMASWStrategy:
         sampling_rate = masw_time_domain_data['sampling_rate']
         
         dispersion_config.sampling_rate = sampling_rate
-        f_plot, cT, A = strategy.compute(u, None, dist, dispersion_config)
+        A = strategy.compute(u, None, dist, dispersion_config)
         
         # 频率范围应该合理
-        assert f_plot[0] >= 0
-        assert f_plot[-1] <= sampling_rate / 2  # 不超过Nyquist频率
+        # 检查结果形状
+        assert A.shape == (dispersion_config.vnum, len(np.fft.fftfreq(u.shape[0], d=1/dispersion_config.sampling_rate)[:u.shape[0]//2]))
+        assert not np.any(np.isnan(A))
+        assert not np.any(np.isinf(A))
 
 
 class TestDispersionFactory:
@@ -392,7 +369,6 @@ class TestDispersionFactory:
             DispersionMethod.FJ_RR,
             DispersionMethod.MFJ_RR,
             DispersionMethod.SLANT_STACK,
-            DispersionMethod.SPAC,
             DispersionMethod.MASW,
         ]
         
@@ -452,7 +428,6 @@ class TestDispersionAnalyzer:
             DispersionMethod.FJ_RR,
             DispersionMethod.MFJ_RR,
             DispersionMethod.SLANT_STACK,
-            DispersionMethod.SPAC,
         ]
         
         for method in methods:
@@ -473,10 +448,12 @@ class TestDispersionAnalyzer:
         dist = masw_time_domain_data['dist']
         
         # MASW需要不同的调用方式
-        f_plot, cT, A = analyzer.analyze(u, None, dist, dispersion_config)
+        A = analyzer.analyze(u, None, dist, dispersion_config)
         
-        assert len(f_plot) == A.shape[0]
-        assert len(cT) == A.shape[1]
+        # 检查结果形状
+        assert A.shape == (dispersion_config.vnum, len(np.fft.fftfreq(u.shape[0], d=1/dispersion_config.sampling_rate)[:u.shape[0]//2]))
+        assert not np.any(np.isnan(A))
+        assert not np.any(np.isinf(A))
 
 
 class TestEdgeCases:
@@ -488,7 +465,7 @@ class TestEdgeCases:
         empty_f = np.array([])
         empty_dist = np.array([])
         
-        strategies = [FJ(), FJ_RR(), MFJ_RR(), SlantStack(), SPAC()]
+        strategies = [FJ(), FJ_RR(), MFJ_RR(), SlantStack()]
         
         for strategy in strategies:
             result = strategy.compute(empty_cc, empty_f, empty_dist, dispersion_config)
@@ -506,7 +483,7 @@ class TestEdgeCases:
         result = strategy.compute(cc_array_f, f, dist, dispersion_config)
         
         # 应该能处理单台站
-        assert result.shape == (n_freq, dispersion_config.vnum)
+        assert result.shape == (dispersion_config.vnum, n_freq)
     
     def test_single_frequency(self, sample_dispersion_data, dispersion_config):
         """测试单频率情况"""
@@ -518,7 +495,7 @@ class TestEdgeCases:
                                 sample_dispersion_data['dist'], dispersion_config)
         
         # 应该能处理单频率
-        assert result.shape == (1, dispersion_config.vnum)
+        assert result.shape == (dispersion_config.vnum, 1)
     
     def test_very_short_arrays(self, dispersion_config):
         """测试非常短的数组"""
@@ -530,7 +507,7 @@ class TestEdgeCases:
         result = strategy.compute(short_cc, short_f, short_dist, dispersion_config)
         
         # 应该能处理短数组
-        assert result.shape == (len(short_f), dispersion_config.vnum)
+        assert result.shape == (dispersion_config.vnum, len(short_f))
 
 
 class TestPerformance:
@@ -560,7 +537,7 @@ class TestPerformance:
         
         # 应该在合理时间内完成
         assert processing_time < 30.0  # 30秒内完成
-        assert result.shape == (n_freq, n_velocity)
+        assert result.shape == (n_velocity, n_freq)
 
 
 class TestIntegration:

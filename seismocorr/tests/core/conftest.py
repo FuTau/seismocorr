@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import tempfile
 import os
 
@@ -13,6 +13,51 @@ def sample_signal() -> np.ndarray:
     signal += 0.1 * np.random.randn(len(t))
     return signal
 
+@pytest.fixture
+def multi_freq_signal() -> np.ndarray:
+    """生成包含多个频率成分的信号"""
+    t = np.linspace(0, 2, 2000)
+    signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 10 * t) + 0.3 * np.sin(2 * np.pi * 15 * t)
+    signal += 0.1 * np.random.randn(len(t))
+    return signal
+
+@pytest.fixture
+def edge_case_signals() -> Dict[str, np.ndarray]:
+    """生成边界情况的信号"""
+    return {
+        'empty': np.array([]),
+        'single_point': np.array([1.0]),
+        'small_signal': np.array([0.5, 1.0, -0.5, 0.0])
+    }
+
+@pytest.fixture
+def batch_traces() -> Dict[str, np.ndarray]:
+    """生成批量轨迹数据"""
+    np.random.seed(42)
+    traces = {}
+    for i in range(5):
+        t = np.linspace(0, 1, 1000)
+        signal = np.sin(2 * np.pi * 5 * t) + 0.1 * np.random.randn(len(t))
+        traces[f'NET.STA{i:02d}.CHZ'] = signal
+    return traces
+
+@pytest.fixture
+def correlation_test_signals() -> Dict[str, Any]:
+    """生成用于互相关延迟检测测试的信号"""
+    sr = 100.0
+    t = np.linspace(0, 1, 1000)
+    signal1 = np.sin(2 * np.pi * 5 * t) + 0.1 * np.random.randn(len(t))
+    
+    # 创建一个提前版本的信号（向左滚动），这样signal2比signal1领先
+    delay_samples = 20  # 0.2秒提前
+    signal2 = np.roll(signal1, -delay_samples)
+    
+    return {
+        'signal1': signal1,
+        'signal2': signal2,
+        'sampling_rate': sr,
+        'known_delay': delay_samples / sr  # 0.2秒，signal2比signal1领先的时间
+    }
 # 添加叠加测试专用的fixture
 @pytest.fixture
 def ccf_list() -> List[np.ndarray]:
@@ -32,7 +77,14 @@ def ccf_list() -> List[np.ndarray]:
         ccf_list.append(noisy_signal)
     
     return ccf_list
-
+@pytest.fixture
+def station_pairs() -> List[Tuple[str, str]]:
+    """生成台站对列表"""
+    return [
+        ('NET.STA00.CHZ', 'NET.STA01.CHZ'),
+        ('NET.STA00.CHZ', 'NET.STA02.CHZ'),
+        ('NET.STA01.CHZ', 'NET.STA03.CHZ')
+    ]
 @pytest.fixture
 def single_ccf() -> np.ndarray:
     """生成单个CCF"""

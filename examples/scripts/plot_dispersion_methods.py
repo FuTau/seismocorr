@@ -334,35 +334,6 @@ def compare_dispersion_methods():
     print("对比图已保存到: dispersion_methods_comparison.png")
     plt.close()
     
-    # 单独绘制每个方法的详细图
-    for method_name, spectrum in all_results.items():
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]})
-        
-        # 功率谱热力图
-        if method_name=='SLANT_STACK方法':
-            # SLANT_STACK方法使用v_vals作为速度数组
-            im = ax1.pcolormesh(freq, v_vals, spectrum/np.nanmax(np.abs(spectrum)), cmap='jet', shading='auto',vmin=0.5,vmax=1)
-        elif method_name=='MASW方法':
-            # MASW方法使用均匀分布的速度数组c
-            im = ax1.pcolormesh(freq, c, spectrum/np.nanmax(np.abs(spectrum)), cmap='jet', shading='auto',vmin=0.5,vmax=1)
-        else:
-            # FJ相关方法使用与SlantStack相同的速度数组v_vals，使用全段互相关的频率数组
-            im = ax1.pcolormesh(freq_full, c, spectrum/np.nanmax(np.abs(spectrum)), cmap='jet', shading='auto',vmin=0,vmax=0.5)
-        ax1.set_title(f'{method_name} - Real Data')
-        ax1.set_ylabel('Phase Velocity (m/s)')
-        ax1.set_ylim(disper_config.vmin, disper_config.vmax)
-        ax1.set_xlim(disper_config.freqmin, disper_config.freqmax)
-        
-        # 颜色条
-        cbar = fig.colorbar(im, ax=ax1)
-        cbar.set_label('Normalized Power')
-        
-        plt.tight_layout()
-        plt.savefig(f'dispersion_{method_name}_result.png', dpi=300, bbox_inches='tight')
-        print(f'{method_name}详细图已保存为: dispersion_{method_name}_result.png')
-        plt.close()
-    
-    print(f"\n所有测试完成!")
 
 # 主函数
 if __name__ == "__main__":

@@ -4,7 +4,10 @@ import glob
 from pathlib import Path
 import re
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
+
+import numpy as np
+import h5py
 
 # 支持的时间格式定义（可扩展）
 _TIMESTAMP_PATTERNS = [
@@ -108,3 +111,76 @@ def scan_h5_files(
         return filtered
 
     return sorted_files
+
+def read_zdh5(h5_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, datetime, Dict[str, Any]]:
+    """
+    读取ZDH5格式的DAS数据文件
+    
+    Args:
+        h5_path: ZDH5文件路径
+        
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, datetime, Dict[str, Any]]:
+            - DAS_data: 处理后的DAS数据，形状为(nx, nt)
+            - x: 空间坐标数组 (m)
+            - t: 时间坐标数组 (s)
+            - begin_time: 数据起始时间
+            - meta: 元数据字典，包含采样率、道间距等信息
+            
+    Raises:
+        FileNotFoundError: 当指定的文件不存在时
+        KeyError: 当文件缺少必要的属性或数据集时
+        IOError: 当文件读取过程中出现错误时
+    """
+    meta: Dict[str, Any] = {}
+    
+    with h5py.File(h5_path, "r") as fp:
+        # 读取原始数据
+        data = fp["Acquisition/Raw[0]/RawData"][...].T
+        
+        # 计算时间采样间隔和空间采样间隔
+        dt = 1 / fp['Acquisition/Raw[0]'].attrs['OutputDataRate']
+        dx = fp['Acquisition'].attrs['SpatialSamplingInterval']
+        
+        # 解析起始时间
+        begin_time_str = str(fp['Acquisition'].attrs['MeasurementStartTime'])[2:-15]
+        meta['starttime'] = begin_time_str + '0'
+        
+        # 读取其他元数据
+        meta['lamb'] = fp['Acquisition'].attrs['PulseWidth']
+        
+        # 解析时间字符串
+        # 支持ISO格式，如：YYYY-MM-DDTHH:MM:SS.ssssssZ
+        if begin_time_str.endswith('Z'):
+            begin_time_str = begin_time_str[:-1]
+        
+        try:
+            begin_time = datetime.fromisoformat(begin_time_str)
+        except ValueError:
+            # 如果解析失败，使用当前时间
+            begin_time = datetime.now()
+        
+        # 计算转换因子
+        gl = fp['Acquisition'].attrs['GaugeLength']  # m
+        n = 1.45  # 光纤折射率
+        lamd = 3e8 / n / fp['Acquisition'].attrs['PulseWidth'] * 1e-9  # 波长计算
+        eta = 0.78  # 耦合效率
+        factor = 4.0 * np.pi * eta * n * gl / lamd  # 转换因子
+        radconv = 10430.378850470453  # 弧度转换系数
+        
+        # 数据转换
+        DAS_data = data / factor / radconv * 1e6  # 转换为应变率
+        
+        # 生成坐标数组
+        nx, nt = data.shape
+        x = np.arange(nx) * dx
+        t = np.arange(nt) * dt
+    
+    # 完善元数据
+    meta['dx'] = dx
+    meta['fs'] = 1 / dt
+    meta['GaugeLength'] = gl
+    meta['nch'] = data.shape[0]
+    meta['time_length'] = data.shape[1] * dt
+    
+    return DAS_data, x, t, begin_time, meta
