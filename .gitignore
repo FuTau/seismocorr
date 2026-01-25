@@ -1,4 +1,44 @@
-.idea/
+# 忽略Python编译文件
 __pycache__/
-*.pyc
-seismocorr.egg-info/
+*.py[cod]
+*$py.class
+
+# 忽略IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 忽略环境文件
+.env
+.env.local
+.env.*.local
+
+# 忽略测试和示例数据
+*.npz
+*.h5
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# 忽略南海test目录
+examples/南海test/
+
+# 忽略打包文件
+*.egg-info/
+dist/
+build/
+
+# 忽略日志文件
+*.log
+logs/
+
+# 忽略操作系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略缓存文件
+.cache/
+.temp/

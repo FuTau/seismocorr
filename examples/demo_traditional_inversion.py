@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from seismocorr.core.traditional_inversion import JointInversion, InversionParams, DispersionCurve
+from seismocorr.core.traditional_inversion.joint_inversion import JointInversion
+from seismocorr.core.traditional_inversion.types import InversionParams, DispersionCurve
 from seismocorr.core.traditional_inversion.plot_utils import plot_vs_step_curve
-from seismocorr.core.dispersion_forward import (
+from seismocorr.core.traditional_inversion.dispersion_forward import (
     forward_func,
     make_forward_model
 )

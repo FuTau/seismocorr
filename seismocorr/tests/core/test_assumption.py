@@ -2,7 +2,7 @@
 import pytest
 import numpy as np
 
-from seismocorr.core.assumption import (
+from seismocorr.core.spfi.assumption import (
     get_assumption,
     StationAvgBuilder,
     RayAvgBuilder,

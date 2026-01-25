@@ -1,7 +1,7 @@
 import h5py
 from obspy import UTCDateTime
 import numpy as np
-from seismocorr.core.correlation import batch_cross_correlation,compute_cross_correlation
+from seismocorr.core.correlation.correlation import batch_cross_correlation,compute_cross_correlation
 import matplotlib.pyplot as plt
 
 def read_zdh5(h5_path):

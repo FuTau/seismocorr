@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 
-from seismocorr.core.subarray import (
+from seismocorr.core.spfi.subarray import (
     get_subarray,
     _validate_sensor_xy,
     SUPPORTED_GEOMETRY,

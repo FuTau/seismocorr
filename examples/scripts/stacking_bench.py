@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import numpy as np
 from seismocorr.utils.io import scan_h5_files, read_zdh5
-from seismocorr.core.correlation import CorrelationConfig, BatchCorrelator
-from seismocorr.core.stacking import stack_ccfs
+from seismocorr.core.correlation.correlation import CorrelationConfig, BatchCorrelator
+from seismocorr.core.correlation.stacking import stack_ccfs
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import argparse
@@ -48,46 +48,69 @@ def process_single_file(filepath):
             return None
 
         # 步骤2: 构建 traces 字典
-        start_trace_time = time.time()
         traces = {}
         for i in range(nch):
             traces[f'ch{i:04d}'] = DAS_data[i, :]
-        end_trace_time = time.time()
 
         # 步骤3: 定义道对
-        start_pairs_time = time.time()
         ref_ch = f'ch{reference_index:04d}'
         pairs = [(ref_ch, f'ch{i:04d}') for i in range(1,nch)]
-        end_pairs_time = time.time()
 
         # 清理不再使用的大型数组
         del DAS_data, x, t, begin_time
 
         # 步骤4: 设置互相关参数，与cc_benchmark保持一致
         # 外层使用顺序处理，内层使用并行处理，避免嵌套并行
+        from seismocorr.preprocessing.normalization_utils import SignalPreprocessor
+        
+        # 设置预处理参数
+        freq_band = (0.5, 40)
+        time_normalize = 'ramn'
+        freq_normalize = 'whiten'
+        time_norm_kwargs = {'fmin': 1, 'Fs': fs, 'norm_win': 0.5}
+        freq_norm_kwargs = {'smooth_win': 20}
+        
+        # 创建互相关配置
         correlation_config = CorrelationConfig(
             method='freq-domain',
-            time_normalize='ramn',
-            freq_normalize='whiten',
-            freq_band=(0.5, 40),
             max_lag=5.0,
             nfft=None,
-            time_norm_kwargs={'fmin': 1, 'Fs': fs, 'norm_win': 0.5},
-            freq_norm_kwargs={'smooth_win': 20}
         )
 
-        # 步骤5: 计算批量互相关
-        start_cc_time = time.time()
+        # 步骤5: 应用预处理
+        start_preprocess_time = time.time()
+        
+        # 预处理每个通道的信号
+        preprocessed_traces = {}
+        for ch, data in traces.items():
+            # 先进行预处理（去趋势、去均值、加窗）
+            preprocessed = SignalPreprocessor.preprocess_signal(
+                data=data,
+                sampling_rate=fs,
+                freq_band=freq_band
+            )
+            # 然后进行归一化
+            normalized = SignalPreprocessor.normalize_signal(
+                data=preprocessed,
+                sampling_rate=fs,
+                time_normalize=time_normalize,
+                freq_normalize=freq_normalize,
+                time_norm_kwargs=time_norm_kwargs,
+                freq_norm_kwargs=freq_norm_kwargs
+            )
+            preprocessed_traces[ch] = normalized
+        end_preprocess_time = time.time()
+
+        # 步骤6: 计算批量互相关
         batch_correlator = BatchCorrelator()
         lags, ccfs, keys = batch_correlator.batch_cross_correlation(
-            traces=traces,
+            traces=preprocessed_traces,
             pairs=pairs,
             sampling_rate=fs,
             n_jobs=-1,  # 使用并行计算，充分利用多核CPU
             parallel_backend='thread',  # 线程后端，避免进程创建开销
             config=correlation_config
         )
-        end_cc_time = time.time()
 
         # 将结果转换为字典格式，与原有代码兼容
         results = {}
@@ -95,7 +118,7 @@ def process_single_file(filepath):
             results[key] = (lags, ccfs[i])
 
         # 清理不再使用的变量
-        del traces, pairs, lags, ccfs, keys
+        del traces, preprocessed_traces, pairs, lags, ccfs, keys
         gc.collect()  # 强制垃圾回收
 
         return results

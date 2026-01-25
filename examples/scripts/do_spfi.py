@@ -21,10 +21,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from time import time
 
-from seismocorr.core.subarray import get_subarray
-from seismocorr.core.spfi import run_spfi
+from seismocorr.core.spfi.subarray import get_subarray
+from seismocorr.core.spfi.spfi import run_spfi
 from seismocorr.config.builder import SPFIConfigBuilder
-from seismocorr.core.assumption import get_assumption
+from seismocorr.core.spfi.assumption import get_assumption
 
 
 def main() -> None:

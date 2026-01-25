@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
-from seismocorr.core.inversion import get_inversion
+from seismocorr.core.spfi.inversion import get_inversion
 
 
 def _obj(A, d, x, x0, alpha, beta):

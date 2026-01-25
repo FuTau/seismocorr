@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 # 添加模块路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from seismocorr.core.stacking import (
+from seismocorr.core.correlation.stacking import (
     StackingStrategy,
     LinearStack,
     SelectiveStack,
