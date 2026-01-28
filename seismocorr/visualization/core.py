@@ -1,128 +1,188 @@
-# visualization/core.py
+# seismocorr/visualization/core.py
 from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
-from .types import BackendName, FigureHandle, PlotSpec, Plugin, Param, ParamSpec
+from .types import BackendName, FigureHandle, Param, ParamSpec, PlotSpec, Plugin
 
-def _type_check(name: str, value, param: Param) -> None:
-    """轻量类型检查：不追求覆盖所有情况，只要能抓住常见错误"""
+
+Kwargs = Dict[str, Any]
+
+
+def _type_check(name: str, value: Any, param: Param) -> None:
+    """对插件参数做轻量类型检查与 choices 校验。
+
+    说明：
+        - 该检查只覆盖常见基础类型（bool/int/float/str/dict/list/list[dict]）。
+        - 其它类型保持宽松，以免过度限制插件自由度。
+
+    Args:
+        name: 参数名。
+        value: 用户传入的参数值。
+        param: 参数定义（包含 ptype / required / default / choices 等字段）。
+
+    Raises:
+        TypeError: value 的类型不符合 param.ptype。
+        ValueError: value 不在 param.choices 中。
+    """
     if value is None:
         return
 
-    t = param.ptype
+    ptype = param.ptype
     ok = True
 
-    if t == "bool":
+    if ptype == "bool":
         ok = isinstance(value, bool)
-    elif t == "int":
+    elif ptype == "int":
         ok = isinstance(value, int) and not isinstance(value, bool)
-    elif t == "float":
+    elif ptype == "float":
         ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-    elif t == "str":
+    elif ptype == "str":
         ok = isinstance(value, str)
-    elif t == "dict":
+    elif ptype == "dict":
         ok = isinstance(value, dict)
-    elif t == "list":
+    elif ptype == "list":
         ok = isinstance(value, list)
-    elif t == "list[dict]":
+    elif ptype == "list[dict]":
         ok = isinstance(value, list) and all(isinstance(x, dict) for x in value)
-    # 其他类型先不强检，保持宽松
     else:
         ok = True
 
     if not ok:
-        raise TypeError(f"参数 {name!r} 类型不符合要求：期望 {t}，实际 {type(value).__name__}")
+        raise TypeError(
+            f"参数 {name!r} 类型不符合要求：期望 {ptype}，实际 {type(value).__name__}。"
+        )
 
-    # choices 检查
-    if param.choices is not None and value is not None:
-        if value not in param.choices:
-            raise ValueError(f"参数 {name!r} 必须是 {param.choices} 之一，实际为 {value!r}")
+    if param.choices is not None and value not in param.choices:
+        raise ValueError(f"参数 {name!r} 必须是 {param.choices} 之一，实际为 {value!r}。")
 
 
-def _prepare_kwargs(params: ParamSpec, user_kwargs: dict) -> dict:
+def _prepare_kwargs(params: ParamSpec, user_kwargs: Kwargs) -> Kwargs:
+    """根据 ParamSpec 合并参数并校验。
+
+    规则：
+        1) 检查未知参数；
+        2) 合并默认值；
+        3) 检查 required；
+        4) 进行基础类型检查与 choices 检查。
+
+    Args:
+        params: 插件参数规范定义。
+        user_kwargs: 用户传入参数。
+
+    Returns:
+        合并后的参数字典（包含默认值）。
+
+    Raises:
+        TypeError: 发现未知参数或缺少必填参数。
+        ValueError: 参数 choices 校验不通过。
     """
-    根据 ParamSpec：
-    - 检查未知参数
-    - 填默认值
-    - 检查 required
-    - 基础类型检查
-    """
-    # 1) 未知参数检查
-    for k in user_kwargs.keys():
-        if k not in params:
-            raise TypeError(f"未知参数: {k!r}。可用参数: {sorted(params.keys())}")
+    for key in user_kwargs.keys():
+        if key not in params:
+            raise TypeError(f"未知参数: {key!r}。可用参数: {sorted(params.keys())}")
 
-    # 2) 合并默认值
-    merged = {}
-    for k, p in params.items():
-        if k in user_kwargs:
-            merged[k] = user_kwargs[k]
+    merged: Kwargs = {}
+    for key, spec in params.items():
+        if key in user_kwargs:
+            merged[key] = user_kwargs[key]
         else:
-            if p.required:
-                raise TypeError(f"缺少必填参数: {k!r}")
-            merged[k] = p.default
+            if spec.required:
+                raise TypeError(f"缺少必填参数: {key!r}")
+            merged[key] = spec.default
 
-        # 3) 基础类型检查
-        _type_check(k, merged[k], p)
+        _type_check(key, merged[key], spec)
 
     return merged
-# =========================
-# Registry：管理“插件”（PlotSpec 生成器）
-# =========================
-# seismocorr/visualization/registry.py (或类似位置)
+
 
 class PluginRegistry:
-    def __init__(self, plugins: Optional[List] = None):
-        """
-        初始化 PluginRegistry，可以传入一个插件列表
-        :param plugins: 一个插件列表，默认为 None 时为空列表
-        """
-        self.plugins = plugins if plugins else []
+    """插件注册表（PlotSpec 生成器管理）。
 
-    def add_plugin(self, plugin: 'Plugin') -> None:
-        """添加插件到注册表"""
-        self.plugins.append(plugin)
+    插件以 plugin.id 作为唯一键。注册表提供：
+        - add_plugin(): 注册插件（检测重复 id）
+        - get(): 按 id 获取插件
+        - list_ids(): 列出所有已注册 id
+    """
 
-    def get(self, plot_id: str) -> 'Plugin':
-        """根据 plot_id 获取插件"""
-        for plugin in self.plugins:
-            if plugin.id == plot_id:
-                return plugin
-        raise ValueError(f"Plugin with id {plot_id} not found.")
+    def __init__(self, plugins: Optional[List[Plugin]] = None) -> None:
+        """初始化注册表。
+
+        Args:
+            plugins: 可选的初始插件列表；为 None 时表示空注册表。
+        """
+        self._plugins: Dict[str, Plugin] = {}
+        if plugins:
+            for plugin in plugins:
+                self.add_plugin(plugin)
+
+    def add_plugin(self, plugin: Plugin) -> None:
+        """注册一个插件。
+
+        Args:
+            plugin: 待注册插件对象。
+
+        Raises:
+            ValueError: plugin.id 已存在。
+        """
+        if plugin.id in self._plugins:
+            raise ValueError(f"重复的 plugin id: {plugin.id!r}。请确保插件 id 唯一。")
+        self._plugins[plugin.id] = plugin
+
+    def get(self, plot_id: str) -> Plugin:
+        """根据 plot_id 获取插件。
+
+        Args:
+            plot_id: 插件 id（如 "ccf.wiggle"）。
+
+        Returns:
+            对应的插件对象。
+
+        Raises:
+            KeyError: 未找到对应 id。
+        """
+        if plot_id not in self._plugins:
+            raise KeyError(f"未找到插件: {plot_id!r}。已注册: {sorted(self._plugins.keys())}")
+        return self._plugins[plot_id]
 
     def list_ids(self) -> List[str]:
-        """列出所有插件的 id"""
-        return [plugin.id for plugin in self.plugins]
+        """列出所有插件 id（排序后）。"""
+        return sorted(self._plugins.keys())
 
 
-# =========================
-# Backend：管理“后端渲染器”
-# =========================
 @dataclass
 class Backend:
+    """绘图后端对象：用于把 PlotSpec 渲染为 FigureHandle。
+
+    Attributes:
+        name: 后端名称（如 "mpl" / "plotly"）。
+        available: 后端是否可用（依赖是否安装）。
+        render: 渲染函数 render(spec) -> FigureHandle。
     """
-    后端对象：用于把 PlotSpec 渲染成 FigureHandle
-    - name: mpl/plotly/...
-    - available: 是否可用（库是否安装）
-    - render: render(spec) -> FigureHandle
-    """
+
     name: BackendName
     available: bool
     render: Any  # Callable[[PlotSpec], FigureHandle]
 
 
 def _load_backend(name: BackendName) -> Backend:
+    """动态加载后端模块（相对本包，不写死顶层名字）。
+
+    约定的导入路径：
+        - seismocorr.visualization.backends.mpl.render
+        - seismocorr.visualization.backends.plotly.render
+
+    Args:
+        name: 后端名称。
+
+    Returns:
+        Backend 对象。
+
+    Raises:
+        ValueError: name 不在支持列表中。
     """
-    动态加载后端模块（相对本包，不写死顶层名字）
-    实际导入路径：
-      seismocorr.visualization.backends.mpl.render
-      seismocorr.visualization.backends.plotly.render
-    """
-    # __package__ 在 seismocorr.visualization.core 中等于 "seismocorr.visualization"
-    base = __package__  # => "seismocorr.visualization"
+    base = __package__  # "seismocorr.visualization"
 
     if name == "mpl":
         mod = importlib.import_module(f"{base}.backends.mpl.render")
@@ -132,22 +192,33 @@ def _load_backend(name: BackendName) -> Backend:
         mod = importlib.import_module(f"{base}.backends.plotly.render")
         return Backend(name="plotly", available=mod.is_available(), render=mod.render)
 
-    raise ValueError(f"未知后端: {name}")
+    raise ValueError(f"未知后端: {name!r}。支持: 'mpl' / 'plotly'。")
 
 
-
-# =========================
-# Visualizer：统一入口
-# =========================
 class Visualizer:
+    """统一绘图入口：插件生成 PlotSpec，后端负责渲染。
+
+    设计：
+        1) plugin.build(data, **kwargs) -> PlotSpec（后端无关）
+        2) backend.render(spec) -> FigureHandle（后端相关）
+    """
+
     def __init__(self, registry: PluginRegistry, default_backend: BackendName = "mpl") -> None:
+        """初始化 Visualizer。
+
+        Args:
+            registry: 插件注册表。
+            default_backend: 默认后端名称（未显式指定 backend 时使用）。
+        """
         self.registry = registry
         self._default_backend: BackendName = default_backend
 
     def set_default_backend(self, backend: BackendName) -> None:
+        """设置默认后端。"""
         self._default_backend = backend
 
     def get_default_backend(self) -> BackendName:
+        """获取默认后端。"""
         return self._default_backend
 
     def plot(
@@ -159,46 +230,53 @@ class Visualizer:
         fallback: bool = True,
         **kwargs: Any,
     ) -> FigureHandle:
-        """
-        统一绘图函数：
-        1) plugin.build(data, **kwargs) -> PlotSpec（后端无关）
-        2) backend.render(spec) -> FigureHandle（后端相关）
+        """统一绘图函数。
 
-        参数：
-        - plugin_id: 如 "ccf.wiggle"
-        - data: 业务数据对象（可以是 ndarray / dict / 自定义类）
-        - backend: 指定后端（mpl/plotly），不传则用默认后端
-        - fallback: 如果指定后端不可用，是否自动回退到另一个可用后端
-        - kwargs: 传给插件 build 的参数（如 title/cmap/normalize...）
+        Args:
+            plugin_id: 插件 id，如 "ccf.wiggle"。
+            data: 业务数据对象（可以是 ndarray / dict / 自定义类）。
+            backend: 指定后端（mpl/plotly）；不传则使用默认后端。
+            fallback: 指定后端不可用时，是否自动回退到另一个后端。
+            **kwargs: 传给插件 build() 的参数（如 title/cmap/normalize...）。
+
+        Returns:
+            FigureHandle：后端返回的图对象句柄。
+
+        Raises:
+            KeyError: 找不到 plugin_id。
+            RuntimeError: 后端不可用且 fallback=False，或回退后仍不可用。
+            ValueError/TypeError: 插件参数校验失败或后端名称非法。
         """
         plugin = self.registry.get(plugin_id)
 
-        # ✅ 先做参数校验/默认值合并
         prepared = _prepare_kwargs(plugin.params, kwargs) if plugin.params else kwargs
-
-        # ✅ 再调用 build（插件可以放心用 prepared 里的字段）
         spec: PlotSpec = plugin.build(data, **prepared)
 
-        # 合并插件默认 layout（用户可在插件 build 内覆盖，也可在 kwargs 里传）
         merged_layout = dict(plugin.default_layout)
         merged_layout.update(spec.layout or {})
         spec.layout = merged_layout
 
-        be = backend or self._default_backend
-        be_obj = _load_backend(be)
+        backend_name = backend or self._default_backend
+        backend_obj = _load_backend(backend_name)
 
-        if not be_obj.available:
+        if not backend_obj.available:
             if not fallback:
-                raise RuntimeError(f"后端 {be} 不可用（可能未安装依赖），且 fallback=False")
-            # 回退策略：优先选择另一个后端
-            alt = "plotly" if be == "mpl" else "mpl"
-            alt_obj = _load_backend(alt)  # type: ignore[arg-type]
+                raise RuntimeError(
+                    f"后端 {backend_name!r} 不可用（可能未安装依赖），且 fallback=False。"
+                )
+
+            alt_name: BackendName = "plotly" if backend_name == "mpl" else "mpl"
+            alt_obj = _load_backend(alt_name)
             if not alt_obj.available:
-                raise RuntimeError(f"后端 {be} 不可用，且回退后端 {alt} 也不可用。请安装对应依赖。")
+                raise RuntimeError(
+                    f"后端 {backend_name!r} 不可用，且回退后端 {alt_name!r} 也不可用。"
+                    "请安装对应依赖。"
+                )
+
             fig = alt_obj.render(spec)
-            fig.spec = spec
+            setattr(fig, "spec", spec)
             return fig
 
-        fig = be_obj.render(spec)
-        fig.spec = spec
+        fig = backend_obj.render(spec)
+        setattr(fig, "spec", spec)
         return fig

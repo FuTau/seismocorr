@@ -42,6 +42,28 @@ class ThreeStationConfig:
 
 
 class ThreeStationInterferometry:
+    """Three-station interferometry（二次干涉）计算器。
+
+    该类用于对多台站/多通道波形（traces, shape (N, T)）进行“三台站”二次处理：
+    对给定台站对 (i, j)，枚举第三台站 k，先计算一阶互相关/互卷积得到
+    C_{ik}(τ)、C_{jk}(τ)，再在频域做二次运算得到二次 NCF：
+
+    - correlation 模式：NCF ∝ IFFT( FFT(Cik) * conj(FFT(Cjk)) )
+    - convolution 模式：NCF ∝ IFFT( FFT(Cik) * FFT(Cjk) )
+
+    当 cfg.mode="auto" 时，假设台站索引顺序对应线性阵列空间顺序：
+    - 若 k 在 (min(i,j), max(i,j)) 开区间内，使用 convolution
+    - 否则使用 correlation
+
+    Attributes:
+        sr: 采样率 (Hz)。
+        xcorr: 一阶互相关/互卷积函数，签名应类似 (x, y, **kwargs) -> (lags, ccf)。
+        cfg: ThreeStationConfig，控制 mode、二次 nfft、max_lag2 等参数。
+
+    Notes:
+        - compute_pair() 会用第一个有效 k 定标二次输出长度（nfft2），确保不同 k 的结果可直接 stacking。
+        - 若 cfg.max_lag2 设置，则二次结果会在时延轴上裁剪到 [-max_lag2, +max_lag2]。
+    """
     def __init__(
         self,
         sampling_rate: float,
