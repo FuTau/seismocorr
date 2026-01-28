@@ -16,13 +16,10 @@ from typing import Any, Dict, Tuple, Union
 from scipy import sparse
 from scipy.optimize import minimize
 from scipy.sparse import csr_matrix
-
+from seismocorr.config.default import SUPPORTED_REGULARIZATIONS
 
 MatrixLike = Union[np.ndarray, csr_matrix]
 InversionResult = Dict[str, Any]
-
-
-SUPPORTED_REGULARIZATIONS = ["none", "l2", "l1", "l1_l2"]
 
 
 class InversionStrategy(ABC):

@@ -13,6 +13,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence, Tuple
 from scipy.sparse import csr_matrix
+from seismocorr.config.default import SUPPORTED_ASSUMPTION, SUPPORTED_GEOMETRY
 
 # 优化库导入
 try:
@@ -34,11 +35,6 @@ except ImportError:
 
 Subarray = List[np.ndarray]
 MatrixLike = csr_matrix
-
-
-SUPPORTED_ASSUMPTION = ["station_avg", "ray_avg"]
-SUPPORTED_GEOMETRY = ["1d", "2d"]
-
 
 class DesignMatrixBuilder(ABC):
     """

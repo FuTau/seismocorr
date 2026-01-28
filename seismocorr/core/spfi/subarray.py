@@ -13,12 +13,9 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from matplotlib.path import Path
 from scipy.spatial import Voronoi
-
+from seismocorr.config.default import SUPPORTED_GEOMETRY
 
 Subarray = List[np.ndarray]
-
-
-SUPPORTED_GEOMETRY = ["1d", "2d"]
 
 
 class SubarrayBuilder(ABC):

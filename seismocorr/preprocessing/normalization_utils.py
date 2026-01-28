@@ -6,9 +6,7 @@ from numba import njit
 from seismocorr.preprocessing.freq_norm import get_freq_normalizer
 from seismocorr.preprocessing.normal_func import bandpass
 from seismocorr.preprocessing.time_norm import get_time_normalizer
-# -----------------------------# 核心算法枚举# -----------------------------
-SUPPORTED_METHODS = ["time-domain", "freq-domain", "deconv", "coherency"]
-NORMALIZATION_OPTIONS = ["zscore", "one-bit", "rms", "no"]
+from seismocorr.config.default import SUPPORTED_METHODS, NORMALIZATION_OPTIONS
 
 
 # -----------------------------# 辅助函数# -----------------------------

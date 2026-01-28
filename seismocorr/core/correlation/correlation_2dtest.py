@@ -24,6 +24,7 @@ from seismocorr.preprocessing.normal_func2d import demean as demean_2d
 from seismocorr.preprocessing.normal_func2d import detrend as detrend_2d
 from seismocorr.preprocessing.normal_func2d import taper as taper_2d
 from seismocorr.preprocessing.time_norm2d import get_time_normalizer_2d
+from seismocorr.config.default import SUPPORTED_METHODS, NORMALIZATION_OPTIONS
 
 # 优化库导入
 try:
@@ -50,12 +51,6 @@ ArrayLike = Union[np.ndarray, List[float]]
 LagsAndCCF2D = Tuple[
     np.ndarray, np.ndarray
 ]  # (lags, ccf_matrix)，ccf_matrix形状为(n_signals, 2*max_lag_samples+1)
-
-
-# -----------------------------# 核心算法枚举
-# -----------------------------
-SUPPORTED_METHODS = ["time-domain", "freq-domain", "deconv", "coherency"]
-NORMALIZATION_OPTIONS = ["zscore", "one-bit", "rms", "no"]
 
 
 # -----------------------------# 主要函数：compute_cross_correlation_2d

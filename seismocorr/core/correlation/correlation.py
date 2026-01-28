@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Union
 from scipy.fftpack import fft, ifft, next_fast_len
 import numpy as np
+from seismocorr.config.default import SUPPORTED_METHODS
 
 # 优化库导入
 try:
@@ -35,7 +36,7 @@ except ImportError:
         """Numba不可用时的回退prange"""
         return range(n)
 
-SUPPORTED_METHODS = ["time-domain", "freq-domain", "deconv", "coherency"]
+
 # -----------------------------# 类型定义# -----------------------------#
 ArrayLike = Union[np.ndarray, List[float]]
 LagsAndCCF = Tuple[np.ndarray, np.ndarray]
