@@ -17,7 +17,7 @@ def generate_data(fs, duration_s, n_samples, n_lags):
     return t[:n_lags], data  # 返回时间和 CCF 数据
 
 def main():
-    # 1) 模拟数据：我们使用 10 个样本，每个样本有 100 个延时点
+
     fs = 50.0  # 采样频率 (Hz)
     duration_s = 20.0  # 数据时长 20 秒
     n_samples = 10  # 10 个样本
@@ -25,25 +25,20 @@ def main():
 
     t, data = generate_data(fs, duration_s, n_samples, n_lags)
 
-    # 2) 初始化 ClusterFilter
     cluster_filter = ClusterFilter(
         lag_window=(-1.5, 1.5),  # 设置延迟窗口范围
         emd_weight=0.7,          # EMD 的权重
         energy_weight=0.3,       # Energy distance 的权重
         select_percentile=(0.3, 0.7)  # 筛选的百分比范围
     )
+    #用法
+    out_lags, out_ccfs= cluster_filter.filter(lags=t, ccfs=data)
 
-    # 3) 使用 fit() 方法计算距离矩阵并生成排序
+    ccf_list = cluster_filter.filter_to_list(lags=t, ccfs=data)
+
     cluster_filter.fit(lags=t, ccfs=data)
-
-    # 4) 使用 transform() 方法获取筛选后的结果
-    out_lags, out_ccfs, out_keys, info = cluster_filter.transform(return_info=True, return_ordered=True)
-
-    # 输出筛选后的 CCFs 和延迟
-    print(f"筛选后的延迟：", out_lags)
-    print(f"筛选后的 CCFs：", out_ccfs)
-
-    # 5) 绘制筛选后的 CCF 结果
+    out_lags, out_ccfs = cluster_filter.transform()
+    #可视化
     plt.figure(figsize=(10, 6))
     plt.imshow(
         out_ccfs,
@@ -56,11 +51,6 @@ def main():
     plt.title("Filtered Cross-Correlation Functions (CCFs)")
     plt.colorbar(label="Amplitude")
     plt.show()
-
-    # 打印筛选过程中的详细信息字典
-    print("\n筛选过程的详细信息：")
-    for key, value in info.items():
-        print(f"{key}: {value}")
 
 if __name__ == "__main__":
     main()

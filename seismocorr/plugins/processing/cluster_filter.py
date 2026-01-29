@@ -1,3 +1,4 @@
+#seismocorr/plugins/processing/cluster_filter.py
 """
 Cluster-like sequencing filter for pre-stacked NCF/CCF segments.
 
@@ -53,12 +54,9 @@ class ClusterFilter:
     distance_matrix_: Optional[np.ndarray] = None
     info_: Optional[Dict[str, Any]] = None
 
-    # 缓存最近一次输入，简化 transform 调用
     _lags_cache: Optional[np.ndarray] = None
     _ccfs_cache: Optional[np.ndarray] = None
     _keys_cache: Optional[List[str]] = None
-
-    # --------------------------- 基础工具：输出适配 stacking.py ---------------------------
 
     @staticmethod
     def as_ccf_list(ccfs_2d: np.ndarray) -> List[np.ndarray]:
@@ -96,8 +94,6 @@ class ClusterFilter:
         Z = X * h[None, :]
         z = np.fft.ifft(Z, axis=1)
         return np.abs(z)
-
-    # --------------------------- 论文距离：EMD 与 Energy distance ---------------------------
 
     @staticmethod
     def _to_nonnegative_distribution(
@@ -204,8 +200,6 @@ class ClusterFilter:
                 D[j, i] = d
         return D
 
-    # --------------------------- “集相邻”：序列化（seriation/sequencing） ---------------------------
-
     @staticmethod
     def greedy_end_extension_order(D: np.ndarray) -> np.ndarray:
         """
@@ -247,8 +241,6 @@ class ClusterFilter:
                 right = i_r
 
         return np.array(order, dtype=int)
-
-    # --------------------------- 因果支到时（arrival time） ---------------------------
 
     @classmethod
     def causal_arrival_time(
@@ -430,6 +422,7 @@ class ClusterFilter:
         lags: Optional[np.ndarray] = None,
         ccfs: Optional[np.ndarray] = None,
         keys: Optional[Sequence[str]] = None,
+        return_keys: bool = False,
         return_info: bool = False,
         return_ordered: bool = False,
     ):
@@ -437,6 +430,7 @@ class ClusterFilter:
         返回筛选后的预叠加片段。
 
         - 若不传 lags/ccfs/keys，则使用 fit() 缓存的输入
+        - return_keys=True 时返回 out_keys
         - return_info=True 时返回 info 字典
         - return_ordered=True 时在 info 中附加 ordered_ccfs 与 ordered_keys
         """
@@ -459,24 +453,32 @@ class ClusterFilter:
         idx = self.selected_indices_
         out_lags = lags.copy()
         out_ccfs = ccfs[idx].copy()
-        out_keys = [keys[i] for i in idx] if keys is not None else None
 
-        if not return_info and not return_ordered:
-            return out_lags, out_ccfs, out_keys
+        out_keys = None
+        if return_keys:
+            out_keys = [keys[i] for i in idx] if keys is not None else None
 
-        info = dict(self.info_)
-        info["order"] = self.order_.copy()
-        info["selected_indices"] = idx.copy()
+        # --- info（可选） ---
+        info = None
+        if return_info or return_ordered:
+            info = dict(self.info_)
+            info["order"] = self.order_.copy()
+            info["selected_indices"] = idx.copy()
 
-        if self.arrival_times_ is not None:
-            info["arrival_times"] = self.arrival_times_.copy()
-            info["selected_arrival_times"] = self.arrival_times_[idx].copy()
+            if self.arrival_times_ is not None:
+                info["arrival_times"] = self.arrival_times_.copy()
+                info["selected_arrival_times"] = self.arrival_times_[idx].copy()
 
-        if return_ordered:
-            info["ordered_ccfs"] = ccfs[self.order_].copy()
-            info["ordered_keys"] = [keys[i] for i in self.order_] if keys is not None else None
+            if return_ordered:
+                info["ordered_ccfs"] = ccfs[self.order_].copy()
+                info["ordered_keys"] = [keys[i] for i in self.order_] if keys is not None else None
 
-        return out_lags, out_ccfs, out_keys, info
+        outputs = [out_lags, out_ccfs]
+        if return_keys:
+            outputs.append(out_keys)
+        if return_info or return_ordered:
+            outputs.append(info)
+        return tuple(outputs)
 
     def to_ccf_list(
         self,
@@ -490,19 +492,18 @@ class ClusterFilter:
         """
         if return_info:
             out_lags, out_ccfs, out_keys, info = self.transform(
-                lags=lags, ccfs=ccfs, keys=keys, return_info=True, return_ordered=False
+                lags=lags, ccfs=ccfs, keys=keys, return_info=True, return_ordered=False, return_keys=False
             )
             return self.as_ccf_list(out_ccfs), out_keys, info
-        out_lags, out_ccfs, out_keys = self.transform(lags=lags, ccfs=ccfs, keys=keys)
+        out_lags, out_ccfs = self.transform(lags=lags, ccfs=ccfs, keys=keys)
         return self.as_ccf_list(out_ccfs)
-
-    # -------------------- 一站式简化接口 --------------------
 
     def filter(
         self,
         lags: np.ndarray,
         ccfs: np.ndarray,
         keys: Optional[Sequence[str]] = None,
+        return_keys: bool = False,
         return_info: bool = False,
         return_ordered: bool = False,
     ):
@@ -510,7 +511,7 @@ class ClusterFilter:
         一站式接口：fit + transform。
         """
         self.fit(lags, ccfs, keys=keys)
-        return self.transform(return_info=return_info, return_ordered=return_ordered)
+        return self.transform(return_info=return_info, return_ordered=return_ordered, return_keys=return_keys)
 
     def filter_to_list(
         self,
