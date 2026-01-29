@@ -1,6 +1,28 @@
 #seismocorr/plugins/processing/cluster_filter.py
 """
+聚类筛选器模块（基于组合距离进行样本筛选）。
 
+数据约定：
+    - lags: (n_lags,)，延时范围。
+    - ccfs: (n_samples, n_lags)，Cross-Correlation Functions（CCFs）矩阵。
+    - keys: (n_samples,)，样本的标识符（可选）。
+
+功能：
+    - ClusterFilter：根据给定的组合距离度量（包括 EMD 和 Energy Distance），
+      对多个样本的 CCFs 进行筛选，选出符合条件的稳定片段。
+      输出经过筛选后的延时（lags）、CCFs 以及样本标识符。
+    
+    - 核心方法：
+      - fit：计算距离矩阵、生成排序 order、计算到时 arrival_times，并选择稳定片段的索引。
+      - transform：返回筛选后的 CCFs（支持不重复传入 lags/ccfs）。
+      - filter：结合 fit 和 transform 的一站式接口，执行整个筛选过程。
+      - filter_to_list：返回 stacking.py 所需的 CCF 列表。
+      
+    - 支持的计算：
+      - 使用 EMD 和 Energy distance 对样本进行匹配度量，构造距离矩阵。
+      - 基于贪心算法对距离矩阵进行排序，尽量将相似的样本排列在一起。
+      - 可选的到时计算：使用包络（Hilbert）方法计算 CCF 的到时。
+      - 基于设定的百分比选择筛选后的样本。
 """
 
 
