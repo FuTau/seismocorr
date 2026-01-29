@@ -2,31 +2,52 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+
+import numpy as np
+import plotly.graph_objects as go
+
 from ...types import FigureHandle, PlotSpec
 from . import primitives
 
 
 def is_available() -> bool:
-    """判断 plotly 是否安装"""
+    """判断 plotly 是否可用（是否安装依赖）。
+
+    Returns:
+        True 表示可导入 plotly；False 表示不可用。
+    """
     try:
         import plotly  # noqa: F401
+
         return True
     except Exception:
         return False
 
 
 def render(spec: PlotSpec) -> FigureHandle:
-    """
-    将 PlotSpec 渲染为 plotly Figure
-    支持的 layer.type：
-      - heatmap / lines / wiggle / vlines / annotations(可后续加)
-    """
-    import plotly.graph_objects as go
+    """将 PlotSpec 渲染为 Plotly Figure。
 
+    支持的 layer.type：
+        - "heatmap"
+        - "lines"
+        - "wiggle"
+        - "vlines"
+        - "annotations"
+        - "polar_heatmap"
+
+    Args:
+        spec: 后端无关的绘图说明书（PlotSpec）。
+
+    Returns:
+        FigureHandle：backend="plotly"，handle 为 plotly Figure。
+
+    Raises:
+        ValueError: 遇到不支持的 layer.type 或 polar_heatmap 参数不合法。
+        KeyError: layer.data 缺少必要字段（如 heatmap 需要 "z" 等）。
+    """
     layout = spec.layout or {}
     fig = go.Figure()
 
-    # 竖线 shapes 汇总（plotly 用 layout.shapes）
     shapes = []
     yaxis_overrides: Dict[str, Any] = {}
 
@@ -41,8 +62,9 @@ def render(spec: PlotSpec) -> FigureHandle:
                 colorbar_label=layer.style.get("colorbar_label", ""),
                 name=layer.name,
             )
+            continue
 
-        elif layer.type == "lines":
+        if layer.type == "lines":
             primitives.add_lines(
                 fig,
                 layer.data["x"],
@@ -51,8 +73,9 @@ def render(spec: PlotSpec) -> FigureHandle:
                 alpha=layer.style.get("alpha", 1.0),
                 name=layer.name,
             )
+            continue
 
-        elif layer.type == "vlines":
+        if layer.type == "vlines":
             xs = layer.data["xs"]
             shapes.extend(
                 primitives.add_vlines(
@@ -63,9 +86,9 @@ def render(spec: PlotSpec) -> FigureHandle:
                     name=layer.name,
                 )
             )
+            continue
 
-        elif layer.type == "wiggle":
-            # 获取 layer 的数据和样式
+        if layer.type == "wiggle":
             yaxis_part = primitives.add_wiggle(
                 fig,
                 x=layer.data["x"],
@@ -75,24 +98,28 @@ def render(spec: PlotSpec) -> FigureHandle:
                 alpha=layer.style.get("alpha", 1.0),
                 labels=layer.data.get("labels"),
                 name=layer.name,
-                highlights=layer.data.get("highlights"),  # 传入高亮数据
-                sort=layer.data.get("sort")  # 传入排序信息
+                highlights=layer.data.get("highlights"),
+                sort=layer.data.get("sort"),
             )
-            
-            # 更新 y 轴设置（可能包括标签和刻度）
             yaxis_overrides.update(yaxis_part)
+            continue
 
-        elif layer.type == "annotations":
-            # 预留：文本标注
+        if layer.type == "annotations":
             # layer.data 约定：{"texts":[{"x":..,"y":..,"text":".."}, ...]}
-            ann = []
+            annotations = []
             for item in layer.data.get("texts", []):
-                ann.append(dict(x=float(item["x"]), y=float(item["y"]), text=str(item["text"]), showarrow=False))
-            fig.update_layout(annotations=ann)
-        elif layer.type == "polar_heatmap":
-            import numpy as np
-            import plotly.graph_objects as go
+                annotations.append(
+                    dict(
+                        x=float(item["x"]),
+                        y=float(item["y"]),
+                        text=str(item["text"]),
+                        showarrow=False,
+                    )
+                )
+            fig.update_layout(annotations=annotations)
+            continue
 
+        if layer.type == "polar_heatmap":
             theta = np.asarray(layer.data["theta"], dtype=float)
             r = np.asarray(layer.data["r"], dtype=float)
             z = np.asarray(layer.data["z"], dtype=float)
@@ -101,38 +128,33 @@ def render(spec: PlotSpec) -> FigureHandle:
             if theta_unit == "deg":
                 theta = np.deg2rad(theta)
             elif theta_unit != "rad":
-                raise ValueError("theta_unit 必须是 'deg' 或 'rad'")
+                raise ValueError("theta_unit 必须是 'deg' 或 'rad'。")
 
             if z.shape != (r.shape[0], theta.shape[0]):
-                raise ValueError("z 形状必须是 (n_r, n_theta)")
+                raise ValueError("polar_heatmap: z 形状必须是 (n_r, n_theta)。")
 
             # 生成规则网格（分辨率可调，越大越细但更重）
-            nr = int(layer.style.get("nr", 300))
             nxy = int(layer.style.get("nxy", 400))
 
-            r_min, r_max = float(np.min(r)), float(np.max(r))
+            r_max = float(np.max(r))
             x = np.linspace(-r_max, r_max, nxy)
             y = np.linspace(-r_max, r_max, nxy)
             X, Y = np.meshgrid(x, y)
             RR = np.sqrt(X**2 + Y**2)
-            TT = (np.arctan2(X, Y) + 2*np.pi) % (2*np.pi)  # 0在N，顺时针
+            TT = (np.arctan2(X, Y) + 2.0 * np.pi) % (2.0 * np.pi)  # 0在N，顺时针
 
-            # 把 RR,TT 映射到 z（最近邻/线性插值）
-            # 简化实现：用最近邻（足够好且代码短）
+            # RR, TT 映射到 z（简化实现：最近邻）
             r_idx = np.searchsorted(r, RR, side="left")
-            r_idx = np.clip(r_idx, 0, len(r)-1)
+            r_idx = np.clip(r_idx, 0, len(r) - 1)
 
-            theta_sorted = theta
-            t_idx = np.searchsorted(theta_sorted, TT, side="left")
-            t_idx = np.clip(t_idx, 0, len(theta_sorted)-1)
+            t_idx = np.searchsorted(theta, TT, side="left")
+            t_idx = np.clip(t_idx, 0, len(theta) - 1)
 
             Z = z[r_idx, t_idx]
-
-            # 圆外区域设为 NaN（透明）
-            Z = np.where(RR <= r_max, Z, np.nan)
+            Z = np.where(RR <= r_max, Z, np.nan)  # 圆外透明
 
             colorscale = primitives.mpl_cmap_to_plotly(layer.style.get("cmap", "viridis"))
-            cbl = layer.style.get("colorbar_label", "")
+            cbar_label = layer.style.get("colorbar_label", "")
 
             fig.add_trace(
                 go.Heatmap(
@@ -140,16 +162,15 @@ def render(spec: PlotSpec) -> FigureHandle:
                     x=x,
                     y=y,
                     colorscale=colorscale,
-                    colorbar=dict(title=cbl) if cbl else None,
+                    colorbar=dict(title=cbar_label) if cbar_label else None,
                     zsmooth="best",
                 )
             )
+            fig.update_yaxes(scaleanchor="x", scaleratio=1)
+            continue
 
-            fig.update_yaxes(scaleanchor="x", scaleratio=1)  # 保持圆形不变形
-        else:
-            raise ValueError(f"plotly 后端不支持的 layer.type: {layer.type}")
+        raise ValueError(f"plotly 后端不支持的 layer.type: {layer.type!r}。")
 
-    # 通用布局：标题/坐标轴
     fig.update_layout(
         title=layout.get("title", "") or "",
         xaxis_title=layout.get("x_label", "") or "",
@@ -158,15 +179,13 @@ def render(spec: PlotSpec) -> FigureHandle:
         margin=dict(l=60, r=20, t=60, b=50),
     )
 
-    # figsize（plotly 用像素，做一个粗略换算）
     figsize = layout.get("figsize")
     if figsize:
-        w = int(float(figsize[0]) * 110)
-        h = int(float(figsize[1]) * 110)
-        fig.update_layout(width=w, height=h)
+        width_px = int(float(figsize[0]) * 110.0)
+        height_px = int(float(figsize[1]) * 110.0)
+        fig.update_layout(width=width_px, height=height_px)
 
-    # y轴标签（wiggle 的 ticktext）
     if yaxis_overrides:
         fig.update_yaxes(**yaxis_overrides)
 
-    return FigureHandle(backend="plotly", handle=fig, extra={}, spec=spec)
+    return FigureHandle(backend="plotly", handle=fig, spec=spec)

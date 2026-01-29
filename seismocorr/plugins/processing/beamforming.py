@@ -1,42 +1,90 @@
-# beamforming.py
-# -*- coding: utf-8 -*-
+# seismocorr/plugins/processing/beamforming.py
 """
 聚束成形计算模块（频域延时叠加 / Bartlett）。
 
 数据约定：
-- data: (n_chan, n_samples)
-- xy_m: (n_chan, 2)，单位 m
-- 输出功率图 power: (Ns, Naz)
+    - data: (n_chan, n_samples)
+    - xy_m: (n_chan, 2)，单位 m
+    - 输出功率图 power: (Ns, Naz)
 
 功能：
-- Beamformer：对多通道数据做频域延时叠加（Bartlett）扫描，输出 BeamformingResult
+    - Beamformer：对多通道数据做频域延时叠加（Bartlett）扫描，
+      输出 BeamformingResult。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict
 
 import numpy as np
-from scipy.signal import get_window
 from scipy.fft import rfft, rfftfreq
+from scipy.signal import get_window
 
 
 @dataclass(frozen=True)
 class BeamformingResult:
-    """聚束成形输出容器。"""
-    azimuth_deg: np.ndarray          # (Naz,)
-    slowness_s_per_m: np.ndarray     # (Ns,)
-    power: np.ndarray                # (Ns, Naz)
-    freqs_hz: np.ndarray             # (Nf_band,)
-    meta: Dict
+    """
+    聚束成形输出结果容器。
+
+    Attributes:
+        azimuth_deg: 方位角数组 (Naz,)，单位：度
+        slowness_s_per_m: 慢度数组 (Ns,)，单位：s/m
+        power: 聚束功率谱 (Ns, Naz)
+        freqs_hz: 参与计算的频率数组 (Nf_band,)
+        meta: 结果相关的元数据字典
+    """
+
+    azimuth_deg: np.ndarray
+    slowness_s_per_m: np.ndarray
+    power: np.ndarray
+    freqs_hz: np.ndarray
+    meta: Dict[str, Any]
 
 
 class Beamformer:
-    """
-    聚束成形计算类。
+    """Frequency-domain delay-and-sum (Bartlett) beamformer.
 
-    初始化参数用于复用（采样率、频带、分帧、窗函数、白化设置）。
+    该类实现经典 Bartlett/延时叠加聚束成形的频域版本：对多通道数据按帧做 rFFT，
+    在指定频带内对每个扫描方向(azimuth)与慢度(slowness)构造相位延迟项，
+    将所有通道频谱相干叠加得到波束输出，并以平均功率作为扫描能量图。
+
+    处理流程（核心步骤）：
+        1) 分帧：每通道以 frame_len_s / hop_s 做无补零分帧，并施加窗函数；
+        2) 频域：对每帧做 rFFT，选取 [fmin, fmax] 内频点；
+        3) （可选）白化：按通道/频点对幅度做归一化，降低谱形差异的影响；
+        4) 扫描：对每个 (slow, azimuth) 计算相位因子
+               exp(j * (r·u) * slow * ω)
+           并将通道频谱叠加形成 beam(t, n, f)；
+        5) 输出功率：对 time-frame 和频点取均值得到 power(slow, azimuth)。
+
+    坐标与方位角定义：
+        - 阵列坐标 xy_m: (x=East, y=North)，单位 m。
+        - azimuth_deg: 0°=北，顺时针为正，输出表示“传播方向”(propagation direction)，
+          与代码中 u = (sin(azi), cos(azi)) 的定义一致。
+
+    Args:
+        fs: 采样率 (Hz)。
+        fmin: 频带下限 (Hz)，需满足 0 <= fmin < fmax。
+        fmax: 频带上限 (Hz)。
+        frame_len_s: 分帧长度（秒）。
+        hop_s: 帧移长度（秒）。
+        window: 窗函数名称（scipy.signal.get_window）。
+        whiten: 是否进行频谱白化（用跨帧 RMS 幅度对频谱归一）。
+        eps: 白化时避免除零的小量。
+
+    Returns:
+        beamform(): 返回 BeamformingResult，其中包含：
+            - azimuth_deg: 扫描方位角数组 (Naz,)
+            - slowness_s_per_m: 扫描慢度数组 (Ns,)
+            - power: 聚束功率图 (Ns, Naz)
+            - freqs_hz: 实际参与叠加的频点 (Nf,)
+            - meta: 参数与约定信息字典，便于复现与记录
+
+    Notes:
+        - 该实现为 Bartlett（非自适应）方法：只做相位对齐与求和，不含 MVDR/Capon 等权重估计。
+        - 分帧为“无补零”方式；若数据长度不足以形成一帧会抛出异常。
+        - 白化有利于抑制强窄带/谱形差异，但也可能降低真实幅度信息；可按任务需求关闭。
     """
 
     def __init__(
@@ -50,6 +98,21 @@ class Beamformer:
         whiten: bool = True,
         eps: float = 1e-12,
     ) -> None:
+        """初始化 Beamformer。
+
+        Args:
+            fs: 采样率 (Hz)
+            fmin: 频带下限 (Hz)
+            fmax: 频带上限 (Hz)
+            frame_len_s: 分帧长度 (秒)
+            hop_s: 帧移长度 (秒)
+            window: 窗函数名称（scipy.signal.get_window）
+            whiten: 是否进行频谱白化
+            eps: 防止除零的小量
+
+        Raises:
+            ValueError: 参数取值不合法
+        """
         self.fs = float(fs)
         self.fmin = float(fmin)
         self.fmax = float(fmax)
@@ -61,7 +124,7 @@ class Beamformer:
 
         if self.fs <= 0:
             raise ValueError("fs 必须为正数")
-        if self.fmin < 0 or self.fmax <= 0 or self.fmax <= self.fmin:
+        if self.fmin < 0 or self.fmax <= self.fmin:
             raise ValueError("频带需要满足 0 <= fmin < fmax")
         if self.frame_len_s <= 0 or self.hop_s <= 0:
             raise ValueError("frame_len_s 与 hop_s 必须为正数")
@@ -73,21 +136,24 @@ class Beamformer:
         azimuth_deg: np.ndarray,
         slowness_s_per_m: np.ndarray,
     ) -> BeamformingResult:
-        """
-        频域延时叠加（Bartlett）扫描。
+        """执行频域延时叠加（Bartlett）聚束成形扫描。
 
-        参数：
-        - data: (n_chan, n_samples)
-        - xy_m: (n_chan, 2)
-        - azimuth_deg: (Naz,)
-        - slowness_s_per_m: (Ns,)
+        Args:
+            data: 多通道时间序列数据 (n_chan, n_samples)
+            xy_m: 台阵坐标 (n_chan, 2)，单位 m，x=East, y=North
+            azimuth_deg: 扫描方位角数组 (Naz,)，0°=北，顺时针
+            slowness_s_per_m: 扫描慢度数组 (Ns,)，单位 s/m
 
-        返回：
-        - BeamformingResult，power: (Ns, Naz)
+        Returns:
+            BeamformingResult: 聚束成形结果对象
+
+        Raises:
+            ValueError: 输入数据维度或参数不合法
         """
         data = np.asarray(data)
         if data.ndim != 2:
             raise ValueError("data 必须是二维数组 (n_chan, n_samples)")
+
         n_chan, n_samp = data.shape
         if n_chan < 1 or n_samp < 2:
             raise ValueError("data 尺寸不合法")
@@ -98,112 +164,125 @@ class Beamformer:
 
         azimuth_deg = np.asarray(azimuth_deg, dtype=float).reshape(-1)
         slowness_s_per_m = np.asarray(slowness_s_per_m, dtype=float).reshape(-1)
-        if azimuth_deg.size < 1:
+
+        if azimuth_deg.size == 0:
             raise ValueError("azimuth_deg 不能为空")
-        if slowness_s_per_m.size < 1:
+        if slowness_s_per_m.size == 0:
             raise ValueError("slowness_s_per_m 不能为空")
 
         frame_len = int(round(self.frame_len_s * self.fs))
         hop = int(round(self.hop_s * self.fs))
+
         if frame_len <= 1 or hop <= 0:
             raise ValueError("由 frame_len_s/hop_s 计算得到的帧长/步长不合法")
         if n_samp < frame_len:
-            raise ValueError("n_samples < frame_len：请增大数据长度或减小 frame_len_s")
+            raise ValueError("n_samples < frame_len")
 
-        # 构造窗函数
         win = get_window(self.window, frame_len, fftbins=True).astype(float)
 
-        # 频率轴与频带选择
         freqs = rfftfreq(frame_len, d=1.0 / self.fs)
         band = (freqs >= self.fmin) & (freqs <= self.fmax)
-        fb = freqs[band]
-        if fb.size == 0:
-            raise ValueError("频带内无可用频点：请调整 frame_len_s 或 fmin/fmax")
+        freqs_band = freqs[band]
 
-        # 分帧数量（不补零）
+        if freqs_band.size == 0:
+            raise ValueError("频带内无可用频点")
+
         n_frames = 1 + (n_samp - frame_len) // hop
         if n_frames < 1:
             raise ValueError("无法形成有效分帧")
 
-        # 计算每通道、每帧的频谱（仅保留频带内频点）
-        X = np.empty((n_chan, n_frames, fb.size), dtype=np.complex128)  # (c, t, f)
-        for c in range(n_chan):
-            frames = self._frame_1d(data[c], frame_len, hop)  # (t, L)
-            frames = frames * win[None, :]
-            F = rfft(frames, axis=-1)  # (t, n_freq)
-            X[c] = F[:, band]
-
-        # 频谱白化（按通道、频点对帧均方根归一）
-        if self.whiten:
-            amp = np.sqrt(np.mean(np.abs(X) ** 2, axis=1, keepdims=True)) + self.eps
-            X = X / amp
-
-        # 角度约定：azimuth 从北顺时针（0=North, 90=East）
-        # 坐标约定：x=East, y=North
-        az = np.deg2rad(azimuth_deg)
-        ux = np.sin(az)[None, :]  # (1, Naz)
-        uy = np.cos(az)[None, :]
-        rdotu = xy_m[:, 0:1] * ux + xy_m[:, 1:2] * uy  # (n_chan, Naz)
-
-
-        omega = 2.0 * np.pi * fb  # (n_fb,)
-        Xt = np.transpose(X, (1, 0, 2))  # (t, c, f)
-
-        Ns = slowness_s_per_m.size
-        Naz = azimuth_deg.size
-        power = np.zeros((Ns, Naz), dtype=float)
-
-        # 扫描慢度：对每个慢度构造相位项并对通道求和
-        for i_s, s in enumerate(slowness_s_per_m):
-            # 传播方向扫描：x_i(t)≈A e^{jω(t-τ_i)}, τ_i = s (r_i·u)
-            # 对齐补偿相位：e^{+jωτ_i}
-            phase = np.exp(+1j * (rdotu[:, :, None] * s) * omega[None, None, :])
-            # y: (t, Naz, f)
-            y = np.einsum("tcf,cnf->tnf", Xt, phase, optimize=True)
-            # p: (Naz, f)
-            p = np.mean(np.abs(y) ** 2, axis=0)
-            # power: (Naz,)
-            power[i_s] = np.mean(p, axis=-1).real
-
-        meta = dict(
-            method="delay_and_sum_frequency_domain",
-            fs=self.fs,
-            fmin=self.fmin,
-            fmax=self.fmax,
-            frame_len_s=self.frame_len_s,
-            hop_s=self.hop_s,
-            window=self.window,
-            whiten=self.whiten,
-            n_frames=int(n_frames),
-            n_chan=int(n_chan),
-            azimuth_definition="from_north_clockwise_deg",
-            azimuth_output="propagation_direction",
-            coords="x_east_m,y_north_m",
-
+        spectra = np.empty(
+            (n_chan, n_frames, freqs_band.size),
+            dtype=np.complex128,
         )
+
+        for chan_idx in range(n_chan):
+            frames = self._frame_1d(data[chan_idx], frame_len, hop)
+            frames *= win[None, :]
+            spectra[chan_idx] = rfft(frames, axis=-1)[:, band]
+
+        if self.whiten:
+            amp = (
+                np.sqrt(np.mean(np.abs(spectra) ** 2, axis=1, keepdims=True))
+                + self.eps
+            )
+            spectra /= amp
+
+        azimuth_rad = np.deg2rad(azimuth_deg)
+        ux = np.sin(azimuth_rad)[None, :]
+        uy = np.cos(azimuth_rad)[None, :]
+        r_dot_u = xy_m[:, 0:1] * ux + xy_m[:, 1:2] * uy
+
+        omega = 2.0 * np.pi * freqs_band
+        spectra_tcf = np.transpose(spectra, (1, 0, 2))
+
+        power = np.zeros(
+            (slowness_s_per_m.size, azimuth_deg.size),
+            dtype=float,
+        )
+
+        for i_s, slow in enumerate(slowness_s_per_m):
+            phase = np.exp(
+                1j * r_dot_u[:, :, None] * slow * omega[None, None, :]
+            )
+            beam = np.einsum(
+                "tcf,cnf->tnf",
+                spectra_tcf,
+                phase,
+                optimize=True,
+            )
+            power[i_s] = np.mean(np.mean(np.abs(beam) ** 2, axis=0), axis=-1)
+
+        meta = {
+            "method": "delay_and_sum_frequency_domain",
+            "fs": self.fs,
+            "fmin": self.fmin,
+            "fmax": self.fmax,
+            "frame_len_s": self.frame_len_s,
+            "hop_s": self.hop_s,
+            "window": self.window,
+            "whiten": self.whiten,
+            "n_frames": int(n_frames),
+            "n_chan": int(n_chan),
+            "azimuth_definition": "from_north_clockwise_deg",
+            "azimuth_output": "propagation_direction",
+            "coords": "x_east_m,y_north_m",
+        }
 
         return BeamformingResult(
             azimuth_deg=azimuth_deg,
             slowness_s_per_m=slowness_s_per_m,
             power=power,
-            freqs_hz=fb,
+            freqs_hz=freqs_band,
             meta=meta,
         )
 
     @staticmethod
     def _frame_1d(x: np.ndarray, frame_len: int, hop: int) -> np.ndarray:
-        """
-        对一维信号进行无补零分帧。
+        """对一维信号进行无补零分帧。
 
-        返回：
-        - frames: (n_frames, frame_len)
+        Args:
+            x: 一维时间序列
+            frame_len: 帧长度（采样点）
+            hop: 帧移（采样点）
+
+        Returns:
+            frames: 分帧结果数组 (n_frames, frame_len)
+
+        Raises:
+            ValueError: 输入维度或长度不合法
         """
         x = np.asarray(x)
         if x.ndim != 1:
             raise ValueError("x 必须是一维数组")
-        n = x.shape[0]
-        if n < frame_len:
+
+        n_samples = x.size
+        if n_samples < frame_len:
             raise ValueError("信号长度小于一帧")
-        n_frames = 1 + (n - frame_len) // hop
-        idx0 = np.arange(frame_len)[None, :] + hop * np.arange(n_frames)[:, None]
-        return x[idx0]
+
+        n_frames = 1 + (n_samples - frame_len) // hop
+        idx = (
+            np.arange(frame_len)[None, :]
+            + hop * np.arange(n_frames)[:, None]
+        )
+        return x[idx]

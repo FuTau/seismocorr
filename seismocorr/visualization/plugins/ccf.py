@@ -20,7 +20,6 @@ def _build_ccf_wiggle(
     highlights=None,
     sort=None,
 
-    # ✅默认不显示中间线
     show_zero_line: bool = False,
 ) -> PlotSpec:
     """
@@ -101,7 +100,6 @@ PLUGINS = [
         build=_build_ccf_wiggle,
         default_layout={"figsize": (10, 6)},
 
-        # ✅新增：data 输入规范（只用于 help/schema，不参与 kwargs 校验）
         data_spec={
             "type": "dict",
             "required_keys": {
@@ -118,7 +116,6 @@ PLUGINS = [
             ],
         },
 
-        # ✅方案B：kwargs 参数说明 + 默认值（默认不显示中间线）
         params={
             "title": Param("str", None, "图标题"),
             "normalize": Param("bool", True, "是否对每道归一化（推荐 True）"),
