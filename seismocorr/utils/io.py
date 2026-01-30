@@ -3,8 +3,11 @@
 import glob
 from pathlib import Path
 import re
+import os
+import time
+import yaml
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Literal
 
 import numpy as np
 import h5py
@@ -184,3 +187,133 @@ def read_zdh5(h5_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, datetim
     meta['time_length'] = data.shape[1] * dt
     
     return DAS_data, x, t, begin_time, meta
+
+def save_dispersion_for_picker(
+    A: np.ndarray,
+    f: np.ndarray,
+    v: np.ndarray,
+    *,
+    method: str = "unknown",
+    out_dir: str = ".",
+    freqmin: Optional[float] = None,
+    freqmax: Optional[float] = None,
+    normalize: bool = True,
+    tag: Optional[str] = None,
+) -> str:
+    """
+    保存为拾取 GUI 可直接读取的 HDF5文件
+    文件内部包含 3 个 dataset：ds / f / c
+      ds: (1, nc, nf)
+      f : (nf,)
+      c : (nc,)
+    """
+    f = np.asarray(f).astype(np.float32)
+    v = np.asarray(v).astype(np.float32)
+    A = np.asarray(A)
+
+    nf = f.size
+    nc = v.size
+
+    if A.shape == (nc, nf):
+        ds2d = np.abs(A)
+    elif A.shape == (nf, nc):
+        ds2d = np.abs(A).T
+    else:
+        raise ValueError(
+            f"A shape {A.shape} 无法与 f(nf={nf}) / v(nc={nc}) 对齐；"
+            f"期望 (nc,nf)=({nc},{nf}) 或 (nf,nc)=({nf},{nc})."
+        )
+
+    if normalize:
+        i1 = 0 if freqmin is None else int(np.argmin(np.abs(f - float(freqmin))))
+        i2 = nf if freqmax is None else int(np.argmin(np.abs(f - float(freqmax)))) + 1
+        i1 = max(0, min(i1, nf - 1))
+        i2 = max(i1 + 1, min(i2, nf))
+
+        m = np.nanmax(ds2d[:, i1:i2])
+        if not np.isfinite(m) or m <= 0:
+            m = 1.0
+        ds2d = np.clip(ds2d / m, 0.0, 1.0)
+
+    ds = ds2d[None, :, :].astype(np.float32)
+
+    fm = float(freqmin) if freqmin is not None else float(f.min())
+    fx = float(freqmax) if freqmax is not None else float(f.max())
+    vmin_i = int(np.round(v.min()))
+    vmax_i = int(np.round(v.max()))
+    ts = time.strftime("%Y%m%d-%H%M%S")
+
+    base = f"ds_{method.upper()}_f{fm:.2f}-{fx:.2f}_v{vmin_i}-{vmax_i}_n{nc}"
+    if tag:
+        base += f"_{tag}"
+    filename = f"{base}_{ts}.h5"
+
+    os.makedirs(out_dir, exist_ok=True)
+    outpath = os.path.join(out_dir, filename)
+    with h5py.File(outpath, "w") as h5:
+        h5.create_dataset("ds", data=ds, compression="gzip", compression_opts=4)
+        h5.create_dataset("f", data=f)
+        h5.create_dataset("c", data=v)
+
+    return outpath
+
+def load_fc2_from_picker_yml(
+    yml_path: str,
+    image_index: int = 0,
+    order: int = 0,
+    layout: Literal["N2", "2N"] = "N2",
+) -> np.ndarray:
+    """
+    从拾取插件导出的 config.yml 中读取曲线，并返回二维数组（形状可选）。
+
+    参数：
+      yml_path     : config.yml 路径
+      image_index  : 第几张频散图
+      order        : 第几阶模式
+      layout       : 返回矩阵形状
+                    - "N2" -> shape (N, 2): [[f1, c1], [f2, c2], ...]
+                    - "2N" -> shape (2, N): [[f1, f2, ...], [c1, c2, ...]]
+
+    返回：
+      np.ndarray: 二维数组（按频率 f 升序排序）
+    """
+    with open(yml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    # 兼容 YAML key 为 int 或者 str
+    def _get(d, k):
+        if not isinstance(d, dict):
+            return None
+        return d[k] if k in d else d.get(str(k), None)
+
+    img_block = _get(data, image_index)
+    if img_block is None:
+        raise KeyError(f"在 {yml_path} 中找不到 image_index={image_index}。现有键：{list(data.keys())}")
+
+    curve = _get(img_block, order)
+    if curve is None:
+        raise KeyError(f"在 image_index={image_index} 下找不到 order={order}。现有键：{list(img_block.keys())}")
+
+    f_list = curve.get("f", [])
+    c_list = curve.get("c", [])
+
+    if len(f_list) == 0 or len(c_list) == 0:
+        raise ValueError(f"曲线为空：image_index={image_index}, order={order}")
+    if len(f_list) != len(c_list):
+        raise ValueError(f"f 与 c 长度不一致：len(f)={len(f_list)} != len(c)={len(c_list)}")
+
+    f_arr = np.asarray(f_list, dtype=float)
+    c_arr = np.asarray(c_list, dtype=float)
+
+    idx = np.argsort(f_arr)
+    f_arr = f_arr[idx]
+    c_arr = c_arr[idx]
+
+    fc = np.column_stack([f_arr, c_arr])  # (N, 2)
+
+    if layout == "2N":
+        return fc.T
+    return fc
+
+if __name__ == "__main__":
+    fc = load_fc2_from_picker_yml("outputs/config.yml", image_index=0, order=0)

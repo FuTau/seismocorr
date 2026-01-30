@@ -6,6 +6,7 @@ from numba import jit
 from dataclasses import dataclass
 from typing import Tuple, Optional, Callable
 from .fj_helper_func import fj, fj_rr, mfj_rr
+from seismocorr.utils.io import save_dispersion_for_picker
 from scipy.special import j0, j1, jn_zeros
 
 @dataclass
@@ -335,6 +336,7 @@ class DispersionAnalyzer:
             plt.savefig(saved_figname, dpi=100)
         plt.show()
 
+
 # 使用示例
 def example_usage():
     """使用示例"""
@@ -359,6 +361,20 @@ def example_usage():
     # 绘制结果
     v = np.linspace(config.vmin, config.vmax, config.vnum)
     analyzer.plot_spectrum(f, v, spectrum, plot_config, "fj_spectrum.png")
+
+    outpath = save_dispersion_for_picker(
+        A=spectrum,
+        f=f,
+        v=v,
+        method=analyzer.method.value,
+        out_dir="outputs",
+        freqmin=config.freqmin,
+        freqmax=config.freqmax,
+        normalize=True,
+        tag=None  # 自定义文件名标识
+    )
+
+    print("Saved picker file:", outpath)
 
 if __name__ == "__main__":
     example_usage()
