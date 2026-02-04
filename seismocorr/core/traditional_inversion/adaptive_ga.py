@@ -23,7 +23,7 @@ DEFAULT_GA_CONFIG = {
     "crossover_rate": 0.8,   # 初始交叉率
     "mutation_rate": 0.1,    # 初始变异率
     "adapt_strategy": "exponential",  # 自适应策略: linear/exponential
-    "elitism_ratio": 0.1,    # 精英保留比例
+    "elitism_ratio": 0.05,    # 精英保留比例
     "param_bounds": {        # 分层边界格式：列表长度=层数，最后1层thickness强制0
         "thickness": [
             (0.0, 5.0), (0.0, 5.0), (0.0, 6.0), (0.0, 6.0),
@@ -82,7 +82,7 @@ class AdaptiveGA:
 
         # 正演函数（外部注入，适配thickness参数）
         self.forward_model: Optional[Callable[[InversionParams], DispersionCurve]] = None
-        # 种群和适应度记录（新增：缓存当前代适应度，避免重复计算）
+        # 种群和适应度记录（缓存当前代适应度，避免重复计算）
         self.population: List[InversionParams] = []
         self.fitness_history: List[float] = []
         self.current_fitness: List[float] = []  # 缓存当前代所有个体的适应度
@@ -120,7 +120,7 @@ class AdaptiveGA:
         if thk_len < 2:
             raise ValueError(f"层数必须≥2（1层实际地层+1层半空间），当前为{thk_len}层")
 
-    # ========== 新增：校验观测曲线格式 ==========
+    # ========== 校验观测曲线格式 ==========
     def _validate_observed_curve(self, observed_curve: DispersionCurve) -> None:
         """校验观测频散曲线的合法性"""
         if not isinstance(observed_curve, (tuple, list)) or len(observed_curve) != 2:
@@ -165,7 +165,7 @@ class AdaptiveGA:
                 individual[key] = ind_param
             self.population.append(individual)
 
-    # ========== 修正点2：复用缓存的适应度，避免重复计算 ==========
+    # ========== 复用缓存的适应度，避免重复计算 ==========
     def _compute_population_fitness(self) -> None:
         """计算并缓存当前种群的所有个体适应度（仅计算一次/代）"""
         self.current_fitness = [self._calculate_individual_fitness(ind) for ind in self.population]
@@ -188,23 +188,23 @@ class AdaptiveGA:
         # 根据自适应策略调整
         if self.adapt_strategy == "exponential":
             # 指数衰减：迭代后期逐步降低探索性
-            decay = np.exp(-generation / self.max_generations)
-            cross_rate = self.crossover_rate * decay
-            mut_rate = self.mutation_rate * decay
+            decay = np.exp(-generation / self.max_generations * 2.5)
         else:  # linear
             # 线性衰减
-            decay = 1 - (generation / self.max_generations)
-            cross_rate = self.crossover_rate * decay
+            decay = 1 - (generation / self.max_generations * 2.5)
+
+        # 仅当适应度差异显著时，才降低率值（避免过度压制）
+        fitness_diff = max_fitness - avg_fitness
+        if fitness_diff > 1e-3:
+            cross_rate = self.crossover_rate * decay * (avg_fitness / max_fitness)
+            mut_rate = self.mutation_rate * decay * (avg_fitness / max_fitness)
+        else:
+            cross_rate = self.crossover_rate * decay  # 无显著差异时，仅按迭代衰减
             mut_rate = self.mutation_rate * decay
 
-        # 适应度差异调整：适应度越高，交叉/变异率越低
-        if max_fitness - avg_fitness > 1e-6:  # 避免除零
-            cross_rate = cross_rate * (avg_fitness / max_fitness)
-            mut_rate = mut_rate * (avg_fitness / max_fitness)
-
         # 保证率值在合理范围
-        cross_rate = np.clip(cross_rate, 0.5, 0.9)
-        mut_rate = np.clip(mut_rate, 0.01, 0.2)
+        cross_rate = np.clip(cross_rate, 0.6, 0.9)
+        mut_rate = np.clip(mut_rate, 0.02 , 0.2)
         return cross_rate, mut_rate
 
     def _calculate_individual_fitness(self, individual: InversionParams) -> float:
@@ -220,7 +220,7 @@ class AdaptiveGA:
 
         # 反归一化：将[0,1]的归一化值还原为物理区间值
         denorm_ind = denormalize_params(individual, self.param_bounds)
-        # ========== 修正点3：校验反归一化后的参数合法性 ==========
+        # ========== 校验反归一化后的参数合法性 ==========
         validate_inversion_params(denorm_ind)
         # 正演生成合成频散曲线
         synthetic_curve = self.forward_model(denorm_ind)
@@ -257,7 +257,7 @@ class AdaptiveGA:
         non_elite_indices = [i for i in range(self.pop_size) if i not in elite_indices]
         non_elite_prob = prob_list[non_elite_indices]  # numpy切片，比纯列表更稳定
     
-        # ========== 核心彻底修复：对非精英子概率列表单独强制归一化 ==========
+        # ========== 对非精英子概率列表单独强制归一化 ==========
         non_elite_prob_sum = non_elite_prob.sum()
         if non_elite_prob_sum < 1e-12:  # 极端情况：非精英个体适应度全为0，等概率分配
             non_elite_prob = np.ones_like(non_elite_prob) / len(non_elite_prob)
@@ -275,7 +275,29 @@ class AdaptiveGA:
         selected = [self.population[i] for i in selected_indices]
     
         # 精英+选择的个体组成新种群
-        return elite + selected
+        selected_pop = elite + selected
+        diversity_threshold = 0.1  # 可根据实际场景调整
+        # 计算所有个体vs参数的标准差（thickness最后一层固定为0，无意义）
+        all_vs = np.array([ind["vs"] for ind in selected_pop])
+        vs_std = np.mean(np.std(all_vs, axis=0))  # 每层vs的标准差均值
+        if vs_std < diversity_threshold:
+            # 注入10%的随机新个体，恢复多样性
+            n_random = int(self.pop_size * 0.1)
+            random_individuals = []
+            for _ in range(n_random):
+                rand_ind = {}
+                for key in ["thickness", "vs"]:
+                    rand_param = np.zeros(self.n_layers, dtype=np.float64)
+                    for i in range(self.n_layers):
+                        rand_param[i] = uniform.rvs(loc=0, scale=1)
+                    if key == "thickness":
+                        rand_param[-1] = 0.0
+                    rand_ind[key] = rand_param
+                random_individuals.append(rand_ind)
+            # 替换选中种群中适应度最低的个体
+            selected_pop = selected_pop[:-n_random] + random_individuals
+    
+        return selected_pop
 
     def _crossover(self, parent1: InversionParams, parent2: InversionParams, cross_rate: float) -> Tuple[InversionParams, InversionParams]:
         """
@@ -314,8 +336,8 @@ class AdaptiveGA:
             mut = individual[key].copy()
             # 生成变异掩码：小于mut_rate则进行变异
             mask = np.random.rand(self.n_layers) < mut_rate
-            # ========== 优化点：噪声方差随变异率动态调整 ==========
-            noise_scale = 0.1 * mut_rate  # 变异率越低，噪声越小，更稳定
+            # ========== 噪声方差随变异率动态调整 ==========
+            noise_scale = 0.05 + 0.05 * mut_rate  # 基础0.05，最高0.07
             noise = np.random.normal(loc=0, scale=noise_scale, size=self.n_layers)
             mut[mask] += noise[mask]
             # 将值限制在归一化区间[0,1]

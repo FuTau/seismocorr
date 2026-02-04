@@ -18,7 +18,7 @@ from seismocorr.core.traditional_inversion.dispersion_forward import (
 )
 
 # 1. 模拟观测频散曲线，注入外部成熟的正演函数
-obs_freq = np.linspace(1, 10, 50)
+obs_freq = np.linspace(1, 10, 200)
 observed_curve = (obs_freq, np.full_like(obs_freq, np.nan))
 
 forward_model = make_forward_model(forward_func, observed_curve, mode=1)

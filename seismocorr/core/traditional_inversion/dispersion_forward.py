@@ -238,7 +238,6 @@ def forward_func(
     # 步骤1：解析降维后的模型参数
     # --------------------------
     periods = 1 / freq
-    freq_order = np.argsort(periods)  # 周期升序对应的频率索引
     periods_sorted = np.sort(periods) # 正演要求周期升序
 
     # 校验输入参数完整性
@@ -292,10 +291,13 @@ def forward_func(
 
     # 正演结果是按升序周期排列的，需映射回原始观测频率顺序
     vel_sorted = disp_curve.velocity
-    vel_aligned = np.zeros_like(freq)
+    freq_sorted = 1 / disp_curve.period
+    freq_order = np.argsort(freq_sorted)
+    freq_aligned = np.sort(freq_sorted)
+    vel_aligned = np.zeros_like(freq_sorted)
     vel_aligned[freq_order] = vel_sorted  # 按原始频率顺序填充速度
     # 
-    return (freq, vel_aligned)
+    return (freq_aligned, vel_aligned)
 
 def make_forward_model(
     forward_func: ForwardFunc,

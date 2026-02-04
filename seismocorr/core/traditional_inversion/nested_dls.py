@@ -88,18 +88,16 @@ class NestedDLS:
         # 展平参数为一维数组
         param_flat = np.concatenate([params[key] for key in sorted(params.keys())])
         param_dim = len(param_flat)
-
         # 正演基准频散曲线
         syn_freq, syn_vel = self.forward_model(params)
         data_dim = len(syn_vel)
-
         # 初始化雅可比矩阵
         jacobian = np.zeros((data_dim, param_dim))
-
         for i in range(param_dim):
             # 扰动参数
             param_flat_h = param_flat.copy()
-            param_flat_h[i] += h
+            h_adaptive = max(h, abs(param_flat[i]) * 0.001)
+            param_flat_h[i] += h_adaptive
             # 重构参数字典
             params_h = {}
             idx = 0
@@ -110,7 +108,7 @@ class NestedDLS:
             # 正演扰动后的频散曲线
             _, syn_vel_h = self.forward_model(params_h)
             # 数值微分
-            jacobian[:, i] = (syn_vel_h - syn_vel) / h
+            jacobian[:, i] = (syn_vel_h - syn_vel) / h_adaptive
 
         return jacobian
 
@@ -124,13 +122,13 @@ class NestedDLS:
         """
         if residual_norm_curr < residual_norm_prev:
             # 残差减小，降低阻尼以加速收敛
-            self.damping *= 0.9
+            self.damping *= 0.95
         else:
             # 残差增大，增大阻尼以保证稳定
-            self.damping *= 1.5
+            self.damping *= 1.8
 
         # 限制阻尼范围
-        self.damping = np.clip(self.damping, 1e-4, 10.0)
+        self.damping = np.clip(self.damping, 1e-3, 10.0)
 
     def _update_params(
         self,
@@ -154,25 +152,39 @@ class NestedDLS:
         # 展平参数为一维数组
         param_keys = sorted(params.keys())
         param_flat = np.concatenate([params[key] for key in param_keys])
+        param_dim = len(param_flat)  # 参数维度
+        data_dim = len(residual)     # 残差维度
 
+        # ========== 增强正则化 + SVD截断求解欠定问题 ==========
+        # 初始参数作为先验（GA输出的全局最优），避免参数过度偏离物理合理范围
+        init_param_flat = np.concatenate([self.init_params[key] for key in param_keys])  # 需在run中初始化self.init_params
+        prior_weight = 0.1  # 先验权重
         # 构建正则化海森矩阵
-        hessian = jacobian.T @ jacobian + self.damping * np.eye(jacobian.shape[1]) + self.hessian_reg * np.eye(jacobian.shape[1])
+        hessian = (
+            jacobian.T @ jacobian                          # 数据项
+            + self.damping * np.eye(param_dim)             # 阻尼项
+            + self.hessian_reg * np.eye(param_dim)         # 正则项
+            + prior_weight * np.eye(param_dim)             # 参数先验项（L2）
+        )
         # 解析梯度计算（J^T @ r）
-        gradient = jacobian.T @ residual
+        gradient = jacobian.T @ residual + prior_weight * (param_flat - init_param_flat)  # 梯度加入先验
+        # SVD截断求解（替代inv/pinv，稳定欠定问题）
+        U, S, Vt = np.linalg.svd(hessian, full_matrices=False)
+        # 截断阈值：保留前k个奇异值（k=min(data_dim*1.2, param_dim)，兼顾数据和参数维度）
+        trunc_threshold = max(1e-3 * S[0], 1e-8)  # 基于最大奇异值的相对阈值
+        S_inv = np.zeros_like(S)
+        for i in range(len(S)):
+            if S[i] > trunc_threshold:
+                S_inv[i] = 1 / S[i]
+        # 重构逆矩阵
+        hessian_inv = Vt.T @ np.diag(S_inv) @ U.T
+        delta = hessian_inv @ gradient
 
-        # 阻尼最小二乘求解更新量
-        try:
-            delta = inv(hessian) @ gradient
-        except np.linalg.LinAlgError:
-            # 奇异矩阵时使用伪逆
-            delta = pinv(hessian) @ gradient
-
-        # 线搜索目标函数：严格按公式计算均方根误差（RMSE）
+        # ========== 线搜索目标函数: 全频率残差 ==========
+        # 线搜索目标函数
         def obj_func(x: np.ndarray) -> float:
             """
-            目标函数：频散曲线拟合均方根误差
-            公式：φ(x) = √[ (1/N) * Σ(v_c(x) - v_o)² ]
-            v_c: 理论计算相速度, v_o: 观测相速度, N: 观测数据点总数
+            目标函数：频散曲线拟合残差
             """
             # 重构参数字典
             params_x = {}
@@ -181,29 +193,36 @@ class NestedDLS:
                 dim = len(params[key])
                 params_x[key] = x[idx:idx+dim]
                 idx += dim
-            # 正演理论相速度
-            _, v_c = self.forward_model(params_x)
-            # 观测相速度、数据点总数
-            v_o = observed_vel
-            N = len(v_o)
-            # 严格匹配公式的RMSE计算
-            phi_x = np.sqrt((1 / N) * np.sum((v_c - v_o) ** 2))
-            return phi_x
+            # 正演全频率合成曲线
+            syn_freq, syn_vel = self.forward_model(params_x)
+             # 调用calculate_residual获取补0后的全频率残差范数（而非仅有效残差）
+            _, residual_norm_full = calculate_residual((self.observed_freq, observed_vel), (syn_freq, syn_vel))
+            return residual_norm_full  # 目标函数改为全频率残差范数
 
+        # 存储当前点的雅可比和参数，用于梯度计算
+        current_jacobian = jacobian.copy()
+        current_param_flat = param_flat.copy()
+        current_init_param_flat = init_param_flat.copy()
+        current_residual = residual.copy()
+        current_prior_weight = prior_weight
+    
         # 构建Scipy线搜索要求的可调用梯度函数
-        def fprime(x: np.ndarray) -> np.ndarray:
-            """梯度函数：返回预计算的解析梯度（线搜索局部近似为固定）"""
-            return gradient
+        def fprime(x_param: np.ndarray) -> np.ndarray:
+            """梯度函数：计算在点x处的梯度"""
+            # 注意：这里假设雅可比矩阵在当前点附近变化不大
+            # 如果雅可比变化剧烈，需要重新计算
+            return current_jacobian.T @ (current_jacobian @ (x_param - current_param_flat) - current_residual) \
+                   + current_prior_weight * (x_param - current_init_param_flat)
 
         # 线搜索求最优步长（无None参数，彻底解决TypeError）
         step = line_search(obj_func, fprime, param_flat, -delta)[0]
         # 步长失效时使用默认值
         if step is None:
             step = self.step_size
-
+            
+        # ========== 参数更新 ==========
         # 更新展平参数
         param_flat_updated = param_flat - step * delta
-
         # 重构参数字典返回
         updated_params = {}
         idx = 0
@@ -233,6 +252,8 @@ class NestedDLS:
             raise RuntimeError("请先调用set_forward_model设置正演函数")
         
         # 验证初始参数合法性
+        self.init_params = init_params.copy()
+        self.observed_freq, self.observed_vel = observed_curve
         validate_inversion_params(init_params)
         current_params = init_params.copy()
         residual_norm_prev = np.inf
