@@ -23,7 +23,7 @@ from scipy.signal import get_window
 
 
 @dataclass(frozen=True)
-class BeamformingResult:
+class DelayAndSumResult:
     """
     聚束成形输出结果容器。
 
@@ -152,7 +152,7 @@ class Beamformer:
         xy_m: np.ndarray,
         azimuth_deg: np.ndarray,
         slowness_s_per_m: np.ndarray,
-    ) -> BeamformingResult:
+    ) -> DelayAndSumResult:
         """执行频域延时叠加（Bartlett）聚束成形扫描。
 
         Args:
@@ -266,7 +266,7 @@ class Beamformer:
             "coords": "x_east_m,y_north_m",
         }
 
-        return BeamformingResult(
+        return DelayAndSumResult(
             azimuth_deg=azimuth_deg,
             slowness_s_per_m=slowness_s_per_m,
             power=power,
