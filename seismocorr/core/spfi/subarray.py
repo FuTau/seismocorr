@@ -67,7 +67,7 @@ class _Voronoi2DBuilder(SubarrayBuilder):
     ) -> Subarray:
 
         if isinstance(n_realizations, bool) or not isinstance(n_realizations, int):
-            raise TypeError(f"n_realizations 类型应为 int，当前为 {type(n_realizations).__name__}: {n_realizations!r}")
+            raise TypeError(f"n_realizations 类型应为 int")
         if n_realizations <= 0:
             raise ValueError(f"n_realizations 应 > 0，当前为: {n_realizations!r}")
         for name, v in [("kmin", kmin), ("kmax", kmax), ("min_sensors", min_sensors)]:
@@ -79,11 +79,9 @@ class _Voronoi2DBuilder(SubarrayBuilder):
             raise ValueError(f"kmax 应 >= kmin，当前为: kmax={kmax!r}, kmin={kmin!r}")
         if min_sensors < 2:
             raise ValueError(f"min_sensors 应 >= 2，当前为: {min_sensors!r}")
-
         if random_state is not None:
             if isinstance(random_state, bool) or not isinstance(random_state, int):
-                raise TypeError(
-                    f"random_state 类型应为 int 或 None，当前为 {type(random_state).__name__}: {random_state!r}")
+                raise TypeError(f"random_state 类型应为 int")
 
         xy = _validate_sensor_xy(sensor_xy, geometry="2d")
         rng = np.random.default_rng(random_state)
@@ -158,11 +156,9 @@ class _RandomWindow1DBuilder(SubarrayBuilder):
             raise TypeError(f"kmin 类型应为 int，当前为 {type(kmin).__name__}: {kmin!r}")
         if isinstance(kmax, bool) or not isinstance(kmax, int):
             raise TypeError(f"kmax 类型应为 int，当前为 {type(kmax).__name__}: {kmax!r}")
-
         if random_state is not None:
             if isinstance(random_state, bool) or not isinstance(random_state, int):
-                raise TypeError(
-                    f"random_state 必须是 int 或 None，当前为 {type(random_state).__name__}: {random_state!r}")
+                raise TypeError(f"random_state 类型应为 int.")
 
         s = _validate_sensor_xy(sensor_xy, geometry="1d")
         rng = np.random.default_rng(random_state)

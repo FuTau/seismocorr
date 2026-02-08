@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, TypedDict
-
 import numpy as np
+from seismocorr.config.builder import ThreeStationConfig
 
 Array = np.ndarray
 LagsAndCCF = Tuple[np.ndarray, np.ndarray]
@@ -24,21 +24,6 @@ class PairNCFResult(TypedDict):
     lags2: np.ndarray
     ccfs: List[np.ndarray]
     ks: List[int]
-
-
-@dataclass
-class ThreeStationConfig:
-    """
-    mode:
-      - "correlation": 二次干涉固定用互相关
-      - "convolution": 二次干涉固定用卷积
-      - "auto": 线性阵列自动分段：
-          k 在 i/j 中间 -> convolution
-          否则 -> correlation
-    """
-    mode: str = "auto"                      # "correlation" | "convolution" | "auto"
-    second_stage_nfft: Optional[int] = None
-    max_lag2: Optional[float] = None
 
 
 class ThreeStationInterferometry:

@@ -94,17 +94,12 @@ class StationAvgBuilder(DesignMatrixBuilder):
             raise TypeError(f"geometry 类型应为 str，当前为 {type(geometry).__name__}: {geometry!r}")
         if pair_sampling is not None:
             if isinstance(pair_sampling, bool) or not isinstance(pair_sampling, int):
-                raise TypeError(
-                    f"pair_sampling 类型应为 int 或 None，当前为 {type(pair_sampling).__name__}: {pair_sampling!r}"
-                )
+                raise TypeError(f"pair_sampling 类型应为 int")
             if pair_sampling < 0:
                 raise ValueError(f"pair_sampling 应 >= 0 或 None，当前为: {pair_sampling!r}")
-
         if random_state is not None:
             if isinstance(random_state, bool) or not isinstance(random_state, int):
-                raise TypeError(
-                    f"random_state 类型应为 int 或 None，当前为 {type(random_state).__name__}: {random_state!r}"
-                )
+                raise TypeError(f"random_state 类型应为 int，当前为 {type(random_state).__name__}: {random_state!r}")
 
         _validate_geometry(geometry)
         n_sensors = _infer_n_sensors(sensor_xy, geometry=geometry)
@@ -161,17 +156,12 @@ class RayAvgBuilder(DesignMatrixBuilder):
             raise TypeError(f"geometry 类型应为 str，当前为 {type(geometry).__name__}: {geometry!r}")
         if pair_sampling is not None:
             if isinstance(pair_sampling, bool) or not isinstance(pair_sampling, int):
-                raise TypeError(
-                    f"pair_sampling 类型应为 int 或 None，当前为 {type(pair_sampling).__name__}: {pair_sampling!r}"
-                )
+                raise TypeError(f"pair_sampling 类型应为 int. ")
             if pair_sampling < 0:
-                raise ValueError(f"pair_sampling 应 >= 0 或 None，当前为: {pair_sampling!r}")
-
+                raise ValueError(f"pair_sampling 应 >= 0 ，当前为: {pair_sampling!r}")
         if random_state is not None:
             if isinstance(random_state, bool) or not isinstance(random_state, int):
-                raise TypeError(
-                    f"random_state 类型应为 int 或 None，当前为 {type(random_state).__name__}: {random_state!r}"
-                )
+                raise TypeError(f"random_state 类型应为 int")
 
         _validate_geometry(geometry)
 

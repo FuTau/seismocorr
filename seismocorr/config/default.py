@@ -57,7 +57,46 @@ SUPPORTED_ASSUMPTION = ["station_avg", "ray_avg"]
 SUPPORTED_GEOMETRY = ["1d", "2d"]
 SUPPORTED_REGULARIZATIONS = ["none", "l2", "l1", "l1_l2"]
 
+# 传统反演GA默认配置
+DEFAULT_GA_CONFIG = {
+    "pop_size": 60,          # 种群大小
+    "max_generations": 80,  # 最大迭代代数
+    "crossover_rate": 0.8,   # 初始交叉率
+    "mutation_rate": 0.1,    # 初始变异率
+    "adapt_strategy": "exponential",  # 自适应策略: linear/exponential
+    "elitism_ratio": 0.05,    # 精英保留比例
+    "param_bounds": {        # 分层边界格式：列表长度=层数，最后1层thickness强制0
+        "thickness": [
+            (0.0, 5.0), (0.0, 5.0), (0.0, 6.0), (0.0, 6.0),
+            (0.0, 8.0), (0.0, 8.0), (0.0, 10.0), (0.0, 10.0),
+            (0.0, 0.0)
+        ],
+        "vs": [
+            (2.0, 3.0), (2.0, 3.0), (2.5, 3.5), (2.5, 3.5),
+            (3.0, 4.0), (3.0, 4.0), (3.5, 4.5), (3.5, 4.5),
+            (3.0, 4.0)
+        ]
+    }
+}
 
+# 联合反演默认配置
+DEFAULT_JOINT_CONFIG = {
+    "ga_config": {},         # GA配置
+    "dls_config": {},        # DLS配置
+    "forward_model": None,   # 正演函数
+    "jacobian_func": None,   # 雅可比函数
+    "verbose": True          # 是否打印日志
+}
+
+# DLS默认配置
+DEFAULT_DLS_CONFIG = {
+    "max_iter": 50,          # 最大迭代次数
+    "damping_init": 0.1,     # 初始阻尼系数
+    "damping_adapt": True,   # 是否自适应调整阻尼
+    "converge_threshold": 1e-4,  # 收敛阈值
+    "step_size": 0.5,        # 初始步长
+    "hessian_reg": 1e-6      # 海森矩阵正则化系数
+}
 # ========================================
 # 💡 处理流程控制
 # ========================================

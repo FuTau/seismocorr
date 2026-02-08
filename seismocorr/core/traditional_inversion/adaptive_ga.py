@@ -15,28 +15,7 @@ from .utils import (
     calculate_fitness,
     denormalize_params
 )
-
-# GA默认配置（适配分层边界格式，默认9层，与你的需求一致）
-DEFAULT_GA_CONFIG = {
-    "pop_size": 60,          # 种群大小
-    "max_generations": 80,  # 最大迭代代数
-    "crossover_rate": 0.8,   # 初始交叉率
-    "mutation_rate": 0.1,    # 初始变异率
-    "adapt_strategy": "exponential",  # 自适应策略: linear/exponential
-    "elitism_ratio": 0.05,    # 精英保留比例
-    "param_bounds": {        # 分层边界格式：列表长度=层数，最后1层thickness强制0
-        "thickness": [
-            (0.0, 5.0), (0.0, 5.0), (0.0, 6.0), (0.0, 6.0),
-            (0.0, 8.0), (0.0, 8.0), (0.0, 10.0), (0.0, 10.0),
-            (0.0, 0.0)
-        ],
-        "vs": [
-            (2.0, 3.0), (2.0, 3.0), (2.5, 3.5), (2.5, 3.5),
-            (3.0, 4.0), (3.0, 4.0), (3.5, 4.5), (3.5, 4.5),
-            (3.0, 4.0)
-        ]
-    }
-}
+from seismocorr.config.default import DEFAULT_GA_CONFIG
 
 
 class AdaptiveGA:

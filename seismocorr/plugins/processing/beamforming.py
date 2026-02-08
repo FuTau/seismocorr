@@ -20,6 +20,7 @@ from typing import Any, Dict
 import numpy as np
 from scipy.fft import rfft, rfftfreq
 from scipy.signal import get_window
+from seismocorr.config.builder import BeamformingConfig
 
 
 @dataclass(frozen=True)
@@ -103,18 +104,7 @@ class Beamformer:
         - 分帧为“无补零”方式；若数据长度不足以形成一帧会抛出异常。
         - 白化有利于抑制强窄带/谱形差异，但也可能降低真实幅度信息；可按任务需求关闭。
     """
-
-    def __init__(
-        self,
-        fs: float,
-        fmin: float = 1.0,
-        fmax: float = 20.0,
-        frame_len_s: float = 4.0,
-        hop_s: float = 2.0,
-        window: str = "hann",
-        whiten: bool = True,
-        eps: float = 1e-12,
-    ) -> None:
+    def __init__(self, config=None):
         """初始化 Beamformer。
 
         Args:
@@ -130,21 +120,7 @@ class Beamformer:
         Raises:
             ValueError: 参数取值不合法
         """
-        self.fs = float(fs)
-        self.fmin = float(fmin)
-        self.fmax = float(fmax)
-        self.frame_len_s = float(frame_len_s)
-        self.hop_s = float(hop_s)
-        self.window = str(window)
-        self.whiten = bool(whiten)
-        self.eps = float(eps)
-
-        if self.fs <= 0:
-            raise ValueError("fs 必须为正数")
-        if self.fmin < 0 or self.fmax <= self.fmin:
-            raise ValueError("频带需要满足 0 <= fmin < fmax")
-        if self.frame_len_s <= 0 or self.hop_s <= 0:
-            raise ValueError("frame_len_s 与 hop_s 必须为正数")
+        self.config = config or BeamformingConfig()
 
     def delay_and_sum(
         self,

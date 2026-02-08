@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from scipy.fftpack import fft, ifft, next_fast_len
 import numpy as np
 from seismocorr.config.default import SUPPORTED_METHODS
+from seismocorr.config.builder import CorrelationConfig
 
 # 优化库导入
 try:
@@ -41,67 +42,6 @@ except ImportError:
 ArrayLike = Union[np.ndarray, List[float]]
 LagsAndCCF = Tuple[np.ndarray, np.ndarray]
 BatchResult = Dict[str, LagsAndCCF]  # {channel_pair: (lags, ccf)}
-
-
-class CorrelationConfig:
-    """
-    互相关计算配置类
-    """
-    def __init__(
-        self,
-        method: str = "time-domain",
-        max_lag: Optional[Union[float, int]] = None,
-        nfft: Optional[int] = None,
-    ):
-        """
-        初始化互相关配置
-        
-        Args:
-            method: 计算方法 ('time-domain', 'freq-domain', 'deconv', 'coherency')
-            max_lag: 最大滞后时间（秒）
-            nfft: FFT长度
-        """
-        self.method = method
-        self.max_lag = max_lag
-        self.nfft = nfft
-        
-        # 验证配置
-        self._validate()
-
-
-    def _validate(self):
-        """验证配置参数的有效性"""
-
-        if self.method not in SUPPORTED_METHODS:
-            raise ValueError(
-                f"不支持的计算方法: {self.method!r}。请从 {SUPPORTED_METHODS} 中选择"
-            )
-
-        if self.max_lag is not None:
-            if isinstance(self.max_lag, bool) or not isinstance(self.max_lag, (int, float)):
-                raise TypeError(
-                    f"max_lag 类型应为 float/int 或 None，当前为 {type(self.max_lag).__name__}: {self.max_lag!r}"
-                )
-            if not np.isfinite(float(self.max_lag)):
-                raise ValueError(f"max_lag 应为有限数值，当前为: {self.max_lag!r}")
-            if float(self.max_lag) < 0:
-                raise ValueError(f"max_lag 应该 >= 0，当前为: {self.max_lag!r}")
-
-        if self.nfft is not None:
-            if isinstance(self.nfft, bool) or not isinstance(self.nfft, int):
-                raise TypeError(
-                    f"nfft 类型应为 int 或 None，当前为 {type(self.nfft).__name__}: {self.nfft!r}"
-                )
-            if self.nfft <= 0:
-                raise ValueError(f"nfft 应为正整数，当前为: {self.nfft!r}")
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """将配置转换为字典"""
-        return {
-            "method": self.method,
-            "max_lag": self.max_lag,
-            "nfft": self.nfft
-        }
 
 
 class CorrelationEngine:

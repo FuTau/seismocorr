@@ -12,18 +12,12 @@ from .types import (
     DispersionCurve,
     InversionResult
 )
+
 from .adaptive_ga import AdaptiveGA
 from .nested_dls import NestedDLS
 from .utils import validate_inversion_params, calculate_residual
+from seismocorr.config.default import DEFAULT_JOINT_CONFIG
 
-# 联合反演默认配置
-DEFAULT_JOINT_CONFIG = {
-    "ga_config": {},         # GA配置
-    "dls_config": {},        # DLS配置
-    "forward_model": None,   # 正演函数
-    "jacobian_func": None,   # 雅可比函数
-    "verbose": True          # 是否打印日志
-}
 
 
 class JointInversion:

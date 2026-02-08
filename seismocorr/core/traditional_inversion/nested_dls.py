@@ -10,16 +10,8 @@ from scipy.optimize import line_search
 
 from .types import DLSConfig, InversionParams, DispersionCurve
 from .utils import validate_inversion_params, calculate_residual
+from seismocorr.config.default import DEFAULT_DLS_CONFIG
 
-# DLS默认配置
-DEFAULT_DLS_CONFIG = {
-    "max_iter": 50,          # 最大迭代次数
-    "damping_init": 0.1,     # 初始阻尼系数
-    "damping_adapt": True,   # 是否自适应调整阻尼
-    "converge_threshold": 1e-4,  # 收敛阈值
-    "step_size": 0.5,        # 初始步长
-    "hessian_reg": 1e-6      # 海森矩阵正则化系数
-}
 
 
 class NestedDLS:

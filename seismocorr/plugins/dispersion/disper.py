@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from enum import Enum
 import numpy as np
 from matplotlib import pyplot as plt
 from numba import jit
@@ -8,34 +7,8 @@ from typing import Tuple, Optional, Callable
 from .fj_helper_func import fj, fj_rr, mfj_rr
 from seismocorr.utils.io import save_dispersion_for_picker
 from scipy.special import j0, j1, jn_zeros
+from seismocorr.config.builder import DispersionConfig, PlotConfig, DispersionMethod
 
-@dataclass
-class DispersionConfig:
-    """频散成像配置参数"""
-    freqmin: float = 0.1
-    freqmax: float = 10.0
-    vmin: float = 100.0
-    vmax: float = 5000.0
-    vnum: int = 100
-    sampling_rate: float = 100.0
-
-@dataclass
-class PlotConfig:
-    """绘图配置参数"""
-    fig_width: int = 10
-    fig_height: int = 6
-    font_size: int = 12
-    cmap: str = 'jet'
-    vmin: float = 0.0
-    vmax: float = 0.8
-
-class DispersionMethod(Enum):
-    """频散成像方法枚举"""
-    FJ = "fj"
-    FJ_RR = "fj_rr"
-    MFJ_RR = "mfj_rr"
-    SLANT_STACK = "slant_stack"
-    MASW = "masw"
 
 class DispersionStrategy(ABC):
     """频散成像策略基类"""

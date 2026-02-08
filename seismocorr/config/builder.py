@@ -1,6 +1,18 @@
 # config/builder.py
+from enum import Enum
+from dataclasses import dataclass
+from seismocorr.config.default import SUPPORTED_METHODS
+
 
 class CorrelationConfig:
+    """
+    初始化互相关配置
+
+    Args:
+        method: 计算方法 ('time-domain', 'freq-domain', 'deconv', 'coherency')
+        max_lag: 最大滞后时间（秒）
+        nfft: FFT长度
+    """
     def __init__(self):
         self.sampling_rate = None
         self.freq_min = self.freq_max = None
@@ -15,10 +27,27 @@ class CorrelationConfig:
         self.max_lag = 2
         self.n_parallel = 4
         self.use_gpu = False
+        self.method = "time-domain"
+        self.nfft = None
 
     def validate(self):
         if not self.sampling_rate or not self.hdf5_path or not self.reference_channel:
-            raise ValueError("Missing required config fields")
+            raise ValueError("缺失关键参数，请检查")
+        if self.method not in SUPPORTED_METHODS:
+            raise ValueError(f"不支持的计算方法: {self.method!r}。请从 {SUPPORTED_METHODS} 中选择")
+        if self.max_lag is not None:
+            if isinstance(self.max_lag, bool) or not isinstance(self.max_lag, (int, float)):
+                raise TypeError(f"max_lag 类型有误，应为 float/int")
+            if float(self.max_lag) < 0:
+                raise ValueError(f"max_lag 应该 >= 0，当前为: {self.max_lag!r}")
+        if self.nfft is not None:
+            if isinstance(self.nfft, bool) or not isinstance(self.nfft, int):
+                raise TypeError(f"nfft 类型有误，应为 int")
+            if self.nfft <= 0:
+                raise ValueError(f"nfft 应为正整数，当前为: {self.nfft!r}")
+
+    def to_dict(self):
+        return self.__dict__.copy()
 
 class CorrelationConfigBuilder:
     def __init__(self):
@@ -46,6 +75,18 @@ class CorrelationConfigBuilder:
     
     def set_dx(self, dx):
         self.config.dx = dx
+        return self
+
+    def set_method(self, method):
+        self.config.method = method
+        return self
+
+    def set_nfft(self, nfft):
+        self.config.nfft = nfft
+        return self
+
+    def set_max_lag(self, lag):
+        self.config.max_lag = lag
         return self
 
     def use_normalization(self, method):
@@ -159,3 +200,107 @@ class SPFIConfigBuilder:
         self.config.validate()
         return self.config
 
+
+# ===================
+# 频散成像 Config
+# ===================
+@dataclass
+class DispersionConfig:
+    """频散成像配置参数"""
+    freqmin: float = 0.1
+    freqmax: float = 10.0
+    vmin: float = 100.0
+    vmax: float = 5000.0
+    vnum: int = 100
+    sampling_rate: float = 100.0
+
+@dataclass
+class PlotConfig:
+    """绘图配置参数"""
+    fig_width: int = 10
+    fig_height: int = 6
+    font_size: int = 12
+    cmap: str = 'jet'
+    vmin: float = 0.0
+    vmax: float = 0.8
+
+class DispersionMethod(Enum):
+    """频散成像方法枚举"""
+    FJ = "fj"
+    FJ_RR = "fj_rr"
+    MFJ_RR = "mfj_rr"
+    SLANT_STACK = "slant_stack"
+    MASW = "masw"
+
+
+# ===================
+# beamforming Config
+# ===================
+class BeamformingConfig:
+    def __init__(self):
+        self.fs = None
+        self.fmin = 1.0
+        self.fmax = 20.0
+        self.frame_len_s = 4.0
+        self.hop_s = 2.0
+        self.window = "hann"
+        self.whiten = True
+        self.eps = 1e-12
+
+    def validate(self):
+        if self.fs is None:
+            raise ValueError("fs 不能为空")
+
+        if self.fs <= 0:
+            raise ValueError("fs 必须 > 0")
+
+        if self.fmin < 0 or self.fmax <= self.fmin:
+            raise ValueError("频带非法")
+
+class BeamformingConfigBuilder:
+    def __init__(self):
+        self.config = BeamformingConfig()
+
+    def set_sampling_rate(self, fs):
+        self.config.fs = fs
+        return self
+
+    def set_bandpass(self, fmin, fmax):
+        self.config.fmin = fmin
+        self.config.fmax = fmax
+        return self
+
+    def set_frame(self, frame_len_s, hop_s):
+        self.config.frame_len_s = frame_len_s
+        self.config.hop_s = hop_s
+        return self
+
+    def set_window(self, window):
+        self.config.window = window
+        return self
+
+    def use_whitening(self, flag=True):
+        self.config.whiten = flag
+        return self
+
+    def build(self):
+        self.config.validate()
+        return self.config
+
+
+# ===================
+# three_stations_interferometry Config
+# ===================
+@dataclass
+class ThreeStationConfig:
+    """
+    mode:
+      - "correlation": 二次干涉固定用互相关
+      - "convolution": 二次干涉固定用卷积
+      - "auto": 线性阵列自动分段：
+          k 在 i/j 中间 -> convolution
+          否则 -> correlation
+    """
+    mode: str = "auto"                      # "correlation" | "convolution" | "auto"
+    second_stage_nfft: int = None
+    max_lag2: float = None
